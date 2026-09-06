@@ -47,7 +47,7 @@ export function WorkingDaysPicker({
       <div className="working-day-toggle-row">
         {WEEKDAY_LABELS.map((label, day) => (
           <button
-            key={label}
+            key={day}
             type="button"
             className={`working-day-toggle ${normalized.includes(day) ? 'is-active' : ''}`}
             aria-pressed={normalized.includes(day)}

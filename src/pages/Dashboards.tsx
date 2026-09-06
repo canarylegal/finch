@@ -43,8 +43,10 @@ import {
   needsMandatoryLeavePrompt,
 } from '../mandatoryLeave'
 import type { LeaveAdjustment } from '../leaveAdjustments'
+import { leaveRequestTypeLabel, isAnnualLeaveRequest } from '../leaveTypes'
 import { formatPolicyUpdatedAt, openPolicyDocument, sortedPolicies } from '../policies'
-import { parseIsoDate, type AbsenceRecord, type BankHoliday } from '../payroll'
+import { formatDisplayDate, parseIsoDate, type AbsenceRecord, type BankHoliday } from '../payroll'
+import { toIsoDate } from '../calendarUtils'
 
 type EmployeeDashboardProps = {
   employee?: Employee
@@ -97,18 +99,18 @@ export function EmployeeDashboard({
   }
   const totalEntitlement = employee ? totalLeaveAllowance(employee, entitlementSettings, bankHolidays) : 0
   const pendingCount = employee
-    ? requests.filter((request) => request.name === employee.name && request.status === 'Pending')
+    ? requests.filter((request) => request.employeeId === employee.id && request.status === 'Pending')
         .length
     : 0
   const percentRemaining =
     totalEntitlement > 0 ? Math.round((remaining / totalEntitlement) * 100) : 0
   const daysUntilReset = daysUntilLeaveYearEnd(APP_TODAY, leaveYear.end)
   const upcomingLeave = employee ? upcomingApprovedLeave(employee.id, absences, APP_TODAY) : []
-  const employeeRequestRows = employee ? employeeRequestsSorted(requests, employee.name).slice(0, 3) : []
+  const employeeRequestRows = employee ? employeeRequestsSorted(requests, employee.id).slice(0, 3) : []
   const leaveYearEnd = leaveYearResetItem(leaveYear)
   const lastPending = employee
     ? requests
-        .filter((request) => request.name === employee.name && request.status === 'Pending')
+        .filter((request) => request.employeeId === employee.id && request.status === 'Pending')
         .at(-1)
     : undefined
 
@@ -258,7 +260,7 @@ export function EmployeeDashboard({
               items={[
                 { label: 'Show pending only', onClick: () => onNavigate('My leave') },
                 { label: 'Show approved only', onClick: () => onNavigate('My leave') },
-                { label: 'Export history', onClick: () => onNotify('Export started') },
+                { label: 'Open leave history', onClick: () => onNavigate('My leave') },
               ]}
             />
           </div>
@@ -276,7 +278,9 @@ export function EmployeeDashboard({
                       ? 'request-icon-pending'
                       : request.status === 'Approved'
                         ? 'request-icon-approved'
-                        : 'request-icon-declined'
+                        : request.status === 'Cancelled'
+                          ? 'request-icon-cancelled'
+                          : 'request-icon-declined'
                   }`}
                 >
                   {request.status === 'Pending' ? (
@@ -289,7 +293,9 @@ export function EmployeeDashboard({
                 </div>
                 <div className="request-copy">
                   <strong>{request.dates}</strong>
-                  <span>Annual leave · {request.duration}</span>
+                  <span>
+                    {leaveRequestTypeLabel(request.leaveType)} · {request.duration}
+                  </span>
                 </div>
                 <span className={`status ${request.status.toLowerCase()}`}>{request.status}</span>
               </div>
@@ -362,8 +368,8 @@ export function EmployeeDashboard({
             <span className="eyebrow">Friendly reminder</span>
             <h2>Take your time</h2>
             <p>
-              You have {formatBalanceAmount(remaining, employee?.entitlementUnit ?? 'days')} left to use before{' '}
-              {formatLeaveYearLabel(leaveYear)}.
+              You have {formatBalanceAmount(remaining, employee?.entitlementUnit ?? 'days')} left to use
+              before {formatDisplayDate(leaveYear.end)}.
             </p>
           </div>
           <button type="button" className="button button-dark" onClick={requestLeave}>
@@ -398,7 +404,6 @@ type AdminDashboardProps = {
   needsLeaveYearClose: boolean
   onAddEmployee: () => void
   onNavigate: (nav: string) => void
-  onNotify: (message: string) => void
 }
 
 export function AdminDashboard({
@@ -424,7 +429,6 @@ export function AdminDashboard({
   needsLeaveYearClose,
   onAddEmployee,
   onNavigate,
-  onNotify,
 }: AdminDashboardProps) {
   const pendingRequests = requests.filter((request) => request.status === 'Pending')
   const pendingExpenses = expenseClaims.filter((claim) => claim.status === 'Pending')
@@ -433,6 +437,25 @@ export function AdminDashboard({
   const needsLeaveYear = !company.leaveYearConfigured
   const needsMandatory = needsMandatoryLeavePrompt(company, leaveYear)
   const daysUntilClose = daysUntilLeaveYearEnd(APP_TODAY, leaveYear.end)
+  const activeEmployeeCount = employees.filter((employee) => employee.status === 'Active').length
+  const weekStart = new Date(
+    APP_TODAY.getFullYear(),
+    APP_TODAY.getMonth(),
+    APP_TODAY.getDate() - ((APP_TODAY.getDay() + 6) % 7),
+  )
+  const weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6)
+  const weekStartIso = toIsoDate(weekStart)
+  const weekEndIso = toIsoDate(weekEnd)
+  const awayThisWeek = new Set(
+    absences
+      .filter(
+        (record) =>
+          record.type === 'annual_leave' &&
+          record.start <= weekEndIso &&
+          record.end >= weekStartIso,
+      )
+      .map((record) => record.employeeId),
+  ).size
 
   return (
     <div className="page admin-page">
@@ -519,18 +542,20 @@ export function AdminDashboard({
         </div>
         <div className="card admin-stat">
           <span className="card-label">Team members</span>
-          <div className="admin-stat-value">8</div>
-          <span className="stat-trend">+2 this quarter</span>
+          <div className="admin-stat-value">{activeEmployeeCount}</div>
+          <span className="stat-trend neutral">Active employees</span>
         </div>
         <div className="card admin-stat">
           <span className="card-label">Away this week</span>
-          <div className="admin-stat-value">2</div>
-          <span className="stat-trend neutral">Across the team</span>
+          <div className="admin-stat-value">{awayThisWeek}</div>
+          <span className="stat-trend neutral">On annual leave</span>
         </div>
         <div className="card admin-stat">
-          <span className="card-label">Open documents</span>
-          <div className="admin-stat-value">14</div>
-          <span className="stat-trend neutral">No action needed</span>
+          <span className="card-label">Pending leave</span>
+          <div className="admin-stat-value">
+            {requests.filter((request) => request.status === 'Pending').length}
+          </div>
+          <span className="stat-trend neutral">Awaiting review</span>
         </div>
       </section>
 
@@ -562,20 +587,23 @@ export function AdminDashboard({
           ) : (
             <>
             {pendingRequests.map((request) => {
-              const employee = employees.find((item) => item.name === request.name)
-              const balanceAfter = employee
-                ? remainingAnnualLeave(
-                    employee,
-                    entitlementSettings,
-                    bankHolidays,
-                    absences,
-                    requests,
-                    leaveYear,
-                    parseDurationDays(request.duration),
-                    request.id,
-                    adjustments,
-                  )
-                : null
+              const employee =
+                employees.find((item) => item.id === request.employeeId) ??
+                employees.find((item) => item.name === request.name)
+              const balanceAfter =
+                employee && isAnnualLeaveRequest(request)
+                  ? remainingAnnualLeave(
+                      employee,
+                      entitlementSettings,
+                      bankHolidays,
+                      absences,
+                      requests,
+                      leaveYear,
+                      parseDurationDays(request.duration),
+                      request.id,
+                      adjustments,
+                    )
+                  : null
 
               return (
               <div className="admin-request" key={request.id}>
@@ -585,7 +613,10 @@ export function AdminDashboard({
                   <span>
                     {request.dates} <i>·</i> {request.duration}
                   </span>
-                  <small>{request.note}</small>
+                  <small>
+                    {leaveRequestTypeLabel(request.leaveType)}
+                    {request.note ? ` · ${request.note}` : ''}
+                  </small>
                 </div>
                 <div className="request-balance">
                   <span>Balance after</span>
@@ -673,7 +704,7 @@ export function AdminDashboard({
               label="Calendar options"
               items={[
                 { label: 'Go to team calendar', onClick: () => onNavigate('Team calendar') },
-                { label: 'Export month', onClick: () => onNotify('Calendar export started') },
+                { label: 'Record absence', onClick: () => onNavigate('Absences') },
               ]}
             />
           </div>

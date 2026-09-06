@@ -103,7 +103,13 @@ import {
   LEAVE_NOT_CONFIGURED_EMPLOYEE_MESSAGE,
   applyMandatoryLeaveBookings,
   confirmationForLeaveYear,
+  mandatoryBookingSignature,
 } from './mandatoryLeave'
+import {
+  absenceTypeForLeaveRequest,
+  isAnnualLeaveRequest,
+  leaveRequestTypeFromLabel,
+} from './leaveTypes'
 import {
   initialPolicies,
   nextPolicyAccent,
@@ -384,19 +390,61 @@ function App() {
     const amendment = request.pendingAmendment
     const amount = countWorkingDaysInRange(amendment.start, amendment.end, employee.workingDays)
 
-    setAbsences((current) =>
-      current.map((item) =>
-        item.id === request.absenceId
-          ? {
-              ...item,
-              start: amendment.start,
-              end: amendment.end,
-              amount,
-              note: amendment.note || item.note,
-            }
-          : item,
-      ),
-    )
+    if (isAnnualLeaveRequest(request)) {
+      const currentDays = parseDurationDays(request.duration)
+      const remainingAfter = remainingAnnualLeave(
+        employee,
+        companyEntitlementSettings(company),
+        bankHolidays,
+        absences,
+        requests,
+        leaveYear,
+        Math.max(0, amount - currentDays),
+        id,
+        leaveAdjustments,
+      )
+      if (remainingAfter < 0) {
+        const proceed = window.confirm(
+          overAllowanceMessage(employee.name, Math.abs(remainingAfter), employee.entitlementUnit),
+        )
+        if (!proceed) return
+      }
+    }
+
+    const recordedAt = toIsoDate(APP_TODAY)
+    let nextAbsenceId = request.absenceId
+
+    if (request.absenceId != null) {
+      setAbsences((current) =>
+        current.map((item) =>
+          item.id === request.absenceId
+            ? {
+                ...item,
+                start: amendment.start,
+                end: amendment.end,
+                amount,
+                note: amendment.note || item.note,
+              }
+            : item,
+        ),
+      )
+    } else {
+      nextAbsenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
+      setAbsences((current) => [
+        ...current,
+        {
+          id: nextAbsenceId!,
+          employeeId: employee.id,
+          type: absenceTypeForLeaveRequest(request.leaveType),
+          start: amendment.start,
+          end: amendment.end,
+          amount,
+          note: amendment.note || 'Approved leave amendment',
+          recordedBy: ADMIN_DISPLAY_NAME,
+          recordedAt,
+        },
+      ])
+    }
 
     setRequests((current) =>
       current.map((item) =>
@@ -404,6 +452,7 @@ function App() {
           ? {
               ...item,
               ...buildLeaveRequestFields(amendment.start, amendment.end, amount, amendment.note),
+              absenceId: nextAbsenceId,
               pendingAmendment: undefined,
             }
           : item,
@@ -414,9 +463,11 @@ function App() {
 
   const updateRequest = (id: number, status: RequestStatus) => {
     const request = requests.find((item) => item.id === id)
-    const employee = employees.find((item) => item.name === request?.name)
+    const employee =
+      employees.find((item) => item.id === request?.employeeId) ??
+      employees.find((item) => item.name === request?.name)
 
-    if (status === 'Approved' && request && employee) {
+    if (status === 'Approved' && request && employee && isAnnualLeaveRequest(request)) {
       const days = parseDurationDays(request.duration)
       const remainingAfter = remainingAnnualLeave(
         employee,
@@ -437,10 +488,6 @@ function App() {
       }
     }
 
-    setRequests((current) =>
-      current.map((item) => (item.id === id ? { ...item, status } : item)),
-    )
-
     if (status === 'Approved' && request && employee) {
       const days = parseDurationDays(request.duration)
       const newAbsenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
@@ -448,7 +495,7 @@ function App() {
         ...current,
         {
           employeeId: employee.id,
-          type: 'annual_leave',
+          type: absenceTypeForLeaveRequest(request.leaveType),
           start: request.start ?? toIsoDate(new Date()),
           end: request.end ?? request.start ?? toIsoDate(new Date()),
           amount: days,
@@ -462,6 +509,10 @@ function App() {
         current.map((item) =>
           item.id === id ? { ...item, status: 'Approved', absenceId: newAbsenceId } : item,
         ),
+      )
+    } else {
+      setRequests((current) =>
+        current.map((item) => (item.id === id ? { ...item, status } : item)),
       )
     }
 
@@ -507,7 +558,8 @@ function App() {
 
     if (
       nextConfirmation &&
-      JSON.stringify(previousConfirmation) !== JSON.stringify(nextConfirmation)
+      mandatoryBookingSignature(previousConfirmation) !==
+        mandatoryBookingSignature(nextConfirmation)
     ) {
       const booked = applyMandatoryLeaveBookings({
         employees,
@@ -590,6 +642,7 @@ function App() {
         duration: `${payload.days} ${payload.days === 1 ? 'day' : 'days'}`,
         note: payload.note,
         status: 'Pending',
+        leaveType: leaveRequestTypeFromLabel(payload.leaveType),
         start: payload.start,
         end: payload.end,
       },
@@ -679,11 +732,30 @@ function App() {
   }
 
   const saveEmployee = (employee: Employee) => {
+    const previous = employees.find((item) => item.id === employee.id)
+    const nextEmployee =
+      employee.entitlementUnit === 'hours'
+        ? { ...employee, entitlementUnit: 'days' as const }
+        : employee
     setEmployees((current) =>
-      current.map((item) => (item.id === employee.id ? employee : item)),
+      current.map((item) => (item.id === employee.id ? nextEmployee : item)),
     )
+    if (previous && previous.name !== nextEmployee.name) {
+      setRequests((current) =>
+        current.map((item) =>
+          item.employeeId === nextEmployee.id
+            ? {
+                ...item,
+                name: nextEmployee.name,
+                initials: nextEmployee.initials,
+                color: nextEmployee.color,
+              }
+            : item,
+        ),
+      )
+    }
     setEditingEmployee(null)
-    notify(`${employee.name} updated`)
+    notify(`${nextEmployee.name} updated`)
   }
 
   const completeHrTask = (taskKey: string) => {
@@ -794,15 +866,57 @@ function App() {
     const employee = employees.find((item) => item.id === payload.employeeId)
     if (!employee) return
 
-    addAbsence({
-      employeeId: employee.id,
-      type: 'annual_leave',
-      start: payload.start,
-      end: payload.end,
-      amount: countWorkingDaysInRange(payload.start, payload.end, employee.workingDays),
-      note: payload.label,
-      recordedBy: 'Alex Morgan',
-    })
+    const days = countWorkingDaysInRange(payload.start, payload.end, employee.workingDays)
+    const remainingAfter = remainingAnnualLeave(
+      employee,
+      companyEntitlementSettings(company),
+      bankHolidays,
+      absences,
+      requests,
+      leaveYear,
+      days,
+      undefined,
+      leaveAdjustments,
+    )
+    if (remainingAfter < 0) {
+      const proceed = window.confirm(
+        overAllowanceMessage(employee.name, Math.abs(remainingAfter), employee.entitlementUnit),
+      )
+      if (!proceed) return
+    }
+
+    const absenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
+    const requestId = Math.max(0, ...requests.map((item) => item.id)) + 1
+    const fields = buildLeaveRequestFields(payload.start, payload.end, days, payload.label)
+
+    setAbsences((current) => [
+      ...current,
+      {
+        id: absenceId,
+        employeeId: employee.id,
+        type: 'annual_leave',
+        start: payload.start,
+        end: payload.end,
+        amount: days,
+        note: payload.label || 'Admin-added leave',
+        recordedBy: ADMIN_DISPLAY_NAME,
+        recordedAt: toIsoDate(APP_TODAY),
+      },
+    ])
+    setRequests((current) => [
+      ...current,
+      {
+        id: requestId,
+        employeeId: employee.id,
+        name: employee.name,
+        initials: employee.initials,
+        color: employee.color,
+        ...fields,
+        status: 'Approved',
+        leaveType: 'annual',
+        absenceId,
+      },
+    ])
     setIsAdminLeaveModalOpen(false)
     notify(`Leave added for ${employee.name}`)
   }
@@ -890,7 +1004,10 @@ function App() {
           <button
             type="button"
             className="nav-item"
-            onClick={() => notify('Help centre coming soon')}
+            onClick={() => {
+              handleNavigation('Policies')
+              notify('Opened policies — help centre coming later')
+            }}
           >
             <Bell size={17} />
             <span>Help centre</span>
@@ -1013,7 +1130,6 @@ function App() {
               )}
               onAddEmployee={() => setIsAddEmployeeOpen(true)}
               onNavigate={handleNavigation}
-              onNotify={notify}
             />
           ) : (
             <EmployeeDashboard
@@ -1061,7 +1177,7 @@ function App() {
             absences={absences}
             bankHolidays={bankHolidays}
             onAddLeave={() => setIsAdminLeaveModalOpen(true)}
-            onNotify={notify}
+            onViewList={() => handleNavigation('Absences')}
           />
         )}
         {activeNav === 'Payroll reports' && isAdmin && (

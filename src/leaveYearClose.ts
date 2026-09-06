@@ -10,6 +10,7 @@ import {
   formatLeaveYearLabel,
   isPastLeaveYearEnd,
   nextLeaveYearPeriod,
+  previousLeaveYearPeriod,
   type LeaveYearPeriod,
 } from './leaveYear'
 import { toIsoDate, type AbsenceRecord, type BankHoliday } from './payroll'
@@ -50,16 +51,42 @@ export function closureForLeaveYear(closures: LeaveYearClosure[], leaveYearKey: 
   return closures.find((item) => item.leaveYearKey === leaveYearKey)
 }
 
+/**
+ * Prefer an unclosed previous year that has already ended; otherwise the current
+ * year when it is overdue or within the close prompt window.
+ */
+export function periodNeedingClose(
+  company: CompanySettings,
+  currentPeriod: LeaveYearPeriod,
+  closures: LeaveYearClosure[],
+  today: Date,
+): LeaveYearPeriod | null {
+  if (!company.leaveYearConfigured) return null
+
+  const previous = previousLeaveYearPeriod(
+    currentPeriod,
+    company.leaveYearStart,
+    company.leaveYearEnd,
+  )
+  if (!isLeaveYearClosed(closures, previous.start) && isPastLeaveYearEnd(today, previous.end)) {
+    return previous
+  }
+
+  if (isLeaveYearClosed(closures, currentPeriod.start)) return null
+  if (isPastLeaveYearEnd(today, currentPeriod.end)) return currentPeriod
+  if (daysUntilLeaveYearEnd(today, currentPeriod.end) <= LEAVE_YEAR_CLOSE_PROMPT_DAYS) {
+    return currentPeriod
+  }
+  return null
+}
+
 export function needsLeaveYearClosePrompt(
   company: CompanySettings,
-  period: LeaveYearPeriod,
+  currentPeriod: LeaveYearPeriod,
   closures: LeaveYearClosure[],
   today: Date,
 ) {
-  if (!company.leaveYearConfigured) return false
-  if (isLeaveYearClosed(closures, period.start)) return false
-  if (isPastLeaveYearEnd(today, period.end)) return true
-  return daysUntilLeaveYearEnd(today, period.end) <= LEAVE_YEAR_CLOSE_PROMPT_DAYS
+  return periodNeedingClose(company, currentPeriod, closures, today) != null
 }
 
 export function pendingLeaveInYear(
@@ -67,11 +94,11 @@ export function pendingLeaveInYear(
   employees: Employee[],
   period: LeaveYearPeriod,
 ) {
-  const names = new Set(employees.map((employee) => employee.name))
+  const ids = new Set(employees.map((employee) => employee.id))
   return requests.filter(
     (request) =>
       request.status === 'Pending' &&
-      names.has(request.name) &&
+      ids.has(request.employeeId) &&
       request.start != null &&
       request.start >= period.start &&
       request.start <= period.end,
@@ -132,6 +159,7 @@ export function buildLeaveYearCloseDraft(args: {
       args.absences,
       args.adjustments,
       args.period,
+      args.company.defaultRollOver,
     ),
   )
 }
@@ -143,11 +171,15 @@ function buildCloseLine(
   absences: AbsenceRecord[],
   adjustments: LeaveAdjustment[],
   period: LeaveYearPeriod,
+  defaultRollOver: boolean,
 ): LeaveYearCloseEmployeeLine {
   const allowance = totalLeaveAllowance(employee, entitlementSettings, bankHolidays)
   const taken = annualLeaveTaken(absences, employee.id, employee.workingDays, period)
   const adjustmentNet = leaveAdjustmentNet(adjustments, employee.id, period)
   const closingBalance = Math.round((allowance + adjustmentNet - taken) * 10) / 10
+  const proposedOpeningBalance = defaultRollOver
+    ? closingBalance
+    : Math.min(0, closingBalance)
 
   return {
     employeeId: employee.id,
@@ -159,7 +191,7 @@ function buildCloseLine(
     taken,
     adjustmentNet,
     closingBalance,
-    proposedOpeningBalance: closingBalance,
+    proposedOpeningBalance,
   }
 }
 

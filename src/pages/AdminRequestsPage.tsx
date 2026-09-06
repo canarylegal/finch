@@ -16,6 +16,7 @@ import { hasPendingAmendment } from '../leaveRequestHelpers'
 import { type LeaveYearPeriod } from '../leaveYear'
 import { formatBalanceAmount, parseDurationDays, remainingAnnualLeave } from '../leaveBalance'
 import type { LeaveAdjustment } from '../leaveAdjustments'
+import { isAnnualLeaveRequest, leaveRequestTypeLabel } from '../leaveTypes'
 import { messagesForRequest } from '../portalMessages'
 import { formatDisplayDate, type AbsenceRecord, type BankHoliday } from '../payroll'
 
@@ -59,11 +60,13 @@ export function AdminRequests({
   const entitlementSettings = companyEntitlementSettings(company)
   const [tab, setTab] = useState<RequestsTab>(initialTab)
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | RequestStatus>('all')
   const query = search.trim().toLowerCase()
 
   const leaveRows = useMemo(
     () =>
       requests.filter((request) => {
+        if (statusFilter !== 'all' && request.status !== statusFilter) return false
         if (!query) return true
         return (
           request.name.toLowerCase().includes(query) ||
@@ -71,7 +74,7 @@ export function AdminRequests({
           request.dates.toLowerCase().includes(query)
         )
       }),
-    [query, requests],
+    [query, requests, statusFilter],
   )
 
   const expenseRows = useMemo(
@@ -127,9 +130,23 @@ export function AdminRequests({
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          <button type="button" className="filter-button">
-            All statuses <ChevronDown size={15} />
-          </button>
+          <label className="filter-select">
+            <span className="sr-only">Filter by status</span>
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as 'all' | RequestStatus)
+              }
+              aria-label="Filter by status"
+            >
+              <option value="all">All statuses</option>
+              <option value="Pending">Pending</option>
+              <option value="Approved">Approved</option>
+              <option value="Declined">Declined</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
+            <ChevronDown size={15} />
+          </label>
         </div>
 
         {tab === 'leave' &&
@@ -140,9 +157,11 @@ export function AdminRequests({
             </div>
           ) : (
             leaveRows.map((request) => {
-              const employee = employees.find((item) => item.name === request.name)
+              const employee =
+                employees.find((item) => item.id === request.employeeId) ??
+                employees.find((item) => item.name === request.name)
               const balanceAfter =
-                request.status === 'Pending' && employee
+                request.status === 'Pending' && employee && isAnnualLeaveRequest(request)
                   ? remainingAnnualLeave(
                       employee,
                       entitlementSettings,
@@ -165,7 +184,10 @@ export function AdminRequests({
                     <span>
                       {request.dates} <i>·</i> {request.duration}
                     </span>
-                    <small>{request.note}</small>
+                    <small>
+                      {leaveRequestTypeLabel(request.leaveType)}
+                      {request.note ? ` · ${request.note}` : ''}
+                    </small>
                     {hasPendingAmendment(request) && (
                       <small className="amendment-pill">Amendment awaiting approval</small>
                     )}

@@ -18,6 +18,7 @@ import { withEmploymentDates } from './hrTasks'
 import type { MandatoryLeaveConfirmation } from './mandatoryLeave'
 import { loadFinchAppData } from './storage'
 import type { EntitlementMode } from './leaveBalance'
+import type { LeaveRequestType } from './leaveTypes'
 
 export type RequestStatus = 'Pending' | 'Approved' | 'Declined' | 'Cancelled'
 export type ExpenseStatus = 'Pending' | 'Approved' | 'Declined'
@@ -55,6 +56,7 @@ export type LeaveRequest = {
   duration: string
   note: string
   status: RequestStatus
+  leaveType?: LeaveRequestType
   start?: string
   end?: string
   absenceId?: number

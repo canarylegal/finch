@@ -32,6 +32,7 @@ import {
   type LeaveAdjustmentDirection,
 } from '../leaveAdjustments'
 import { formatMessageTimestamp, messagesForEmployee } from '../portalMessages'
+import { leaveRequestTypeLabel } from '../leaveTypes'
 import {
   ABSENCE_TYPE_LABELS,
   DEFAULT_WORKING_DAYS,
@@ -111,19 +112,18 @@ export function EmployeeEditModal({
             </label>
             <label>
               Unit
-              <select
-                value={draft.entitlementUnit}
-                disabled={draft.entitlementMode === 'proRata'}
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    entitlementUnit: event.target.value as 'days' | 'hours',
-                  })
-                }
-              >
-                <option value="days">Days</option>
-                <option value="hours">Hours</option>
-              </select>
+                <select
+                  value={draft.entitlementUnit}
+                  disabled={draft.entitlementMode === 'proRata'}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      entitlementUnit: event.target.value as 'days' | 'hours',
+                    })
+                  }
+                >
+                  <option value="days">Days</option>
+                </select>
             </label>
           </div>
           <div className="entitlement-mode-field">
@@ -369,7 +369,6 @@ export function AddEmployeeModal({
                 }
               >
                 <option value="days">Days</option>
-                <option value="hours">Hours</option>
               </select>
             </label>
           </div>
@@ -428,6 +427,11 @@ export function AddEmployeeModal({
               onChange={(event) => setRollOver(Number(event.target.value) || 0)}
             />
           </label>
+          {company.defaultRollOver && (
+            <p className="field-helper">
+              Company roll-over is on — enter any opening/carried days for this employee if needed.
+            </p>
+          )}
           <WorkingDaysPicker value={workingDays} onChange={setWorkingDays} />
           <div className="form-row">
             <label>
@@ -517,7 +521,7 @@ export function EmployeeLeaveHistoryModal({
     .sort((a, b) => b.start.localeCompare(a.start))
 
   const employeeRequests = requests
-    .filter((request) => request.name === employee.name)
+    .filter((request) => request.employeeId === employee.id)
     .sort((a, b) => b.dates.localeCompare(a.dates))
 
   const yearAdjustments = adjustmentsForEmployeeYear(adjustments, employee.id, leaveYear)
@@ -691,7 +695,9 @@ export function EmployeeLeaveHistoryModal({
                         ? 'request-icon-pending'
                         : request.status === 'Approved'
                           ? 'request-icon-approved'
-                          : 'request-icon-declined'
+                          : request.status === 'Cancelled'
+                            ? 'request-icon-cancelled'
+                            : 'request-icon-declined'
                     }`}
                   >
                     {request.status === 'Pending' ? (
@@ -705,7 +711,7 @@ export function EmployeeLeaveHistoryModal({
                   <div className="request-copy">
                     <strong>{request.dates}</strong>
                     <span>
-                      Annual leave · {request.duration}
+                      {leaveRequestTypeLabel(request.leaveType)} · {request.duration}
                       {request.note ? ` · ${request.note}` : ''}
                     </span>
                   </div>

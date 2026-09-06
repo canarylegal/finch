@@ -11,8 +11,8 @@ import {
   buildLeaveYearCloseDraft,
   confirmLeaveYearClose,
   formatLeaveYearCloseReport,
-  isLeaveYearClosed,
   pendingLeaveInYear,
+  periodNeedingClose,
   sortedLeaveYearClosures,
   type LeaveYearCloseEmployeeLine,
   type LeaveYearClosure,
@@ -59,24 +59,27 @@ export function LeaveYearsPage({
   onConfirmClose,
   onNotify,
 }: LeaveYearsPageProps) {
-  const closed = isLeaveYearClosed(closures, leaveYear.start)
-  const [tab, setTab] = useState<LeaveYearsTab>(closed ? 'history' : 'close')
+  const closePeriod = periodNeedingClose(company, leaveYear, closures, today)
+  const [tab, setTab] = useState<LeaveYearsTab>(closePeriod ? 'close' : 'history')
   const [draftLines, setDraftLines] = useState<LeaveYearCloseEmployeeLine[]>([])
 
   const nextPeriod = useMemo(
-    () => nextLeaveYearPeriod(leaveYear, company.leaveYearStart, company.leaveYearEnd),
-    [leaveYear, company.leaveYearStart, company.leaveYearEnd],
+    () =>
+      closePeriod
+        ? nextLeaveYearPeriod(closePeriod, company.leaveYearStart, company.leaveYearEnd)
+        : null,
+    [closePeriod, company.leaveYearStart, company.leaveYearEnd],
   )
 
   const pending = useMemo(
-    () => pendingLeaveInYear(requests, employees, leaveYear),
-    [requests, employees, leaveYear],
+    () => (closePeriod ? pendingLeaveInYear(requests, employees, closePeriod) : []),
+    [requests, employees, closePeriod],
   )
 
   const history = useMemo(() => sortedLeaveYearClosures(closures), [closures])
 
   useEffect(() => {
-    if (closed || !company.leaveYearConfigured) {
+    if (!closePeriod || !company.leaveYearConfigured) {
       setDraftLines([])
       return
     }
@@ -87,13 +90,13 @@ export function LeaveYearsPage({
         bankHolidays,
         absences,
         adjustments,
-        period: leaveYear,
+        period: closePeriod,
       }),
     )
-  }, [closed, company, leaveYear, employees, bankHolidays, absences, adjustments])
+  }, [closePeriod, company, employees, bankHolidays, absences, adjustments])
 
-  const daysLeft = daysUntilLeaveYearEnd(today, leaveYear.end)
-  const overdue = isPastLeaveYearEnd(today, leaveYear.end)
+  const daysLeft = closePeriod ? daysUntilLeaveYearEnd(today, closePeriod.end) : 0
+  const overdue = closePeriod ? isPastLeaveYearEnd(today, closePeriod.end) : false
 
   const updateProposed = (employeeId: number, value: number) => {
     setDraftLines((current) =>
@@ -104,6 +107,7 @@ export function LeaveYearsPage({
   }
 
   const handleConfirm = () => {
+    if (!closePeriod || !nextPeriod) return
     if (pending.length > 0) {
       const proceed = window.confirm(
         `${pending.length} pending leave ${pending.length === 1 ? 'request' : 'requests'} remain in this leave year. Closing will not approve them. Continue?`,
@@ -112,13 +116,13 @@ export function LeaveYearsPage({
     }
 
     const confirmed = window.confirm(
-      `Close ${formatLeaveYearLabel(leaveYear)} and apply opening balances to ${formatLeaveYearLabel(nextPeriod)}? This cannot be undone.`,
+      `Close ${formatLeaveYearLabel(closePeriod)} and apply opening balances to ${formatLeaveYearLabel(nextPeriod)}? This cannot be undone.`,
     )
     if (!confirmed) return
 
     const result = confirmLeaveYearClose({
       draftLines,
-      period: leaveYear,
+      period: closePeriod,
       company,
       existingClosures: closures,
       existingAdjustments: adjustments,
@@ -183,15 +187,15 @@ export function LeaveYearsPage({
               <strong>Leave year not configured</strong>
               <span>Confirm the company leave year in Settings before closing a period.</span>
             </div>
-          ) : closed ? (
+          ) : !closePeriod || !nextPeriod ? (
             <div className="empty-state">
               <div className="empty-icon">
                 <Check size={20} />
               </div>
-              <strong>{formatLeaveYearLabel(leaveYear)} is closed</strong>
+              <strong>Nothing to close right now</strong>
               <span>
-                Opening balances were applied to {formatLeaveYearLabel(nextPeriod)}. View the report
-                under Previous years.
+                Finch will prompt you near the end of {formatLeaveYearLabel(leaveYear)}, or if a
+                previous leave year was left unclosed.
               </span>
               <button type="button" className="button button-secondary" onClick={() => setTab('history')}>
                 View previous years
@@ -201,11 +205,11 @@ export function LeaveYearsPage({
             <>
               <div className="section-heading">
                 <div>
-                  <h2>Review {formatLeaveYearLabel(leaveYear)}</h2>
+                  <h2>Review {formatLeaveYearLabel(closePeriod)}</h2>
                   <p>
                     {overdue
                       ? 'This leave year has ended — approve closing balances to carry into the next year.'
-                      : `${daysLeft} day${daysLeft === 1 ? '' : 's'} remaining until ${formatDisplayDate(leaveYear.end)}. Approve when ready; Finch will apply opening balances to ${formatLeaveYearLabel(nextPeriod)}.`}
+                      : `${daysLeft} day${daysLeft === 1 ? '' : 's'} remaining until ${formatDisplayDate(closePeriod.end)}. Approve when ready; Finch will apply opening balances to ${formatLeaveYearLabel(nextPeriod)}.`}
                   </p>
                 </div>
               </div>
@@ -279,6 +283,8 @@ export function LeaveYearsPage({
               <p className="field-helper">
                 Closing balance excludes pending requests. Edit opening next year if you agreed a
                 different carry (including a deficit). Zero means no opening adjustment.
+                {!company.defaultRollOver &&
+                  ' Company roll-over is off, so unused leave defaults to 0 carry (deficits still proposed).'}
               </p>
 
               <div className="leave-year-close-actions">

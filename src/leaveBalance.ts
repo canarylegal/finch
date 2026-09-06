@@ -1,20 +1,25 @@
 import {
   countWorkingDaysInRange,
   normalizeWorkingDays,
+  overlapWorkingDays,
   parseIsoDate,
   type AbsenceRecord,
   type BankHoliday,
 } from './payroll'
 import { absenceInLeaveYear, requestInLeaveYear, type LeaveYearPeriod } from './leaveYear'
 import { leaveAdjustmentNet, type LeaveAdjustment } from './leaveAdjustments'
+import { isAnnualLeaveRequest, type LeaveRequestType } from './leaveTypes'
 
 export type EntitlementMode = 'proRata' | 'custom'
 
 export type LeaveRequestLike = {
   id: number
+  employeeId?: number
   name: string
   duration: string
   status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled'
+  leaveType?: LeaveRequestType
+  source?: 'mandatory'
   start?: string
 }
 
@@ -151,23 +156,31 @@ export function annualLeaveTaken(
         record.type === 'annual_leave' &&
         (!leaveYear || absenceInLeaveYear(record, leaveYear)),
     )
-    .reduce(
-      (total, record) => total + countWorkingDaysInRange(record.start, record.end, pattern),
-      0,
-    )
+    .reduce((total, record) => {
+      if (!leaveYear) {
+        return total + countWorkingDaysInRange(record.start, record.end, pattern)
+      }
+      return (
+        total +
+        overlapWorkingDays(record.start, record.end, leaveYear.start, leaveYear.end, pattern)
+      )
+    }, 0)
 }
 
 export function pendingLeaveDays(
   requests: LeaveRequestLike[],
-  employeeName: string,
+  employeeId: number,
   leaveYear?: LeaveYearPeriod,
   excludeRequestId?: number,
+  employeeName?: string,
 ) {
   return requests
     .filter(
       (request) =>
-        request.name === employeeName &&
+        (request.employeeId === employeeId ||
+          (request.employeeId == null && employeeName != null && request.name === employeeName)) &&
         request.status === 'Pending' &&
+        isAnnualLeaveRequest(request) &&
         request.id !== excludeRequestId &&
         (!leaveYear || requestInLeaveYear(request.start, leaveYear)),
     )
@@ -188,7 +201,13 @@ export function remainingAnnualLeave(
   const allowance = totalLeaveAllowance(employee, company, bankHolidays)
   const adjustmentNet = leaveAdjustmentNet(adjustments, employee.id, leaveYear)
   const taken = annualLeaveTaken(absences, employee.id, employee.workingDays, leaveYear)
-  const pending = pendingLeaveDays(requests, employee.name, leaveYear, excludeRequestId)
+  const pending = pendingLeaveDays(
+    requests,
+    employee.id,
+    leaveYear,
+    excludeRequestId,
+    employee.name,
+  )
   return allowance + adjustmentNet - taken - pending - additionalDays
 }
 

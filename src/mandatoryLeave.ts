@@ -36,6 +36,23 @@ export function confirmationForLeaveYear(
   return confirmations.find((item) => item.leaveYearKey === leaveYearKey(period))
 }
 
+/** Compare booking-relevant fields only (ignore confirmedAt timestamps). */
+export function mandatoryBookingSignature(
+  confirmation: MandatoryLeaveConfirmation | undefined | null,
+) {
+  if (!confirmation) return null
+  return JSON.stringify({
+    leaveYearKey: confirmation.leaveYearKey,
+    noneThisYear: confirmation.noneThisYear,
+    ranges: confirmation.ranges.map((range) => ({
+      id: range.id,
+      start: range.start,
+      end: range.end,
+      label: range.label ?? '',
+    })),
+  })
+}
+
 export function needsMandatoryLeavePrompt(company: CompanySettings, period: LeaveYearPeriod) {
   if (!company.leaveYearConfigured) return false
   return !confirmationForLeaveYear(company.mandatoryLeaveConfirmations, period)
@@ -165,6 +182,7 @@ export function applyMandatoryLeaveBookings({
         color: employee.color,
         ...buildLeaveRequestFields(range.start, range.end, days, note),
         status: 'Approved',
+        leaveType: 'annual',
         absenceId,
         source: 'mandatory',
         mandatoryYearKey: yearKey,

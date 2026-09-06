@@ -7,6 +7,7 @@ import { companyInitials, type CompanySettings, type SettingsTab } from '../doma
 import {
   confirmationForLeaveYear,
   leaveYearKey,
+  mandatoryBookingSignature,
   nextMandatoryRangeId,
   upsertMandatoryConfirmation,
   type MandatoryLeaveRange,
@@ -84,23 +85,37 @@ export function SettingsPage({
   }
 
   const saveSettings = () => {
-    const validRanges = ranges.filter(
-      (range) => range.start && range.end && range.start <= range.end,
-    )
-    const touchedMandatory = noneThisYear || validRanges.length > 0 || Boolean(confirmation)
-    const mandatoryLeaveConfirmations = touchedMandatory
-      ? upsertMandatoryConfirmation(draft.mandatoryLeaveConfirmations, {
-          leaveYearKey: yearKey,
-          noneThisYear,
-          ranges: noneThisYear ? [] : validRanges,
-          confirmedAt: new Date().toISOString(),
-        })
-      : draft.mandatoryLeaveConfirmations
+    let mandatoryLeaveConfirmations = draft.mandatoryLeaveConfirmations
+
+    if (activeTab === 'leave') {
+      const validRanges = ranges.filter(
+        (range) => range.start && range.end && range.start <= range.end,
+      )
+      const previous = confirmationForLeaveYear(draft.mandatoryLeaveConfirmations, leaveYear)
+      const nextDraft = {
+        leaveYearKey: yearKey,
+        noneThisYear,
+        ranges: noneThisYear ? [] : validRanges,
+        confirmedAt: previous?.confirmedAt ?? new Date().toISOString(),
+      }
+      const shouldPersist =
+        noneThisYear || validRanges.length > 0 || Boolean(previous)
+      const contentChanged =
+        mandatoryBookingSignature(previous) !== mandatoryBookingSignature(nextDraft)
+
+      if (shouldPersist && contentChanged) {
+        mandatoryLeaveConfirmations = upsertMandatoryConfirmation(
+          draft.mandatoryLeaveConfirmations,
+          {
+            ...nextDraft,
+            confirmedAt: new Date().toISOString(),
+          },
+        )
+      }
+    }
 
     onSave({
       ...draft,
-      leaveYearConfigured:
-        draft.leaveYearConfigured || activeTab === 'company' || activeTab === 'leave',
       mandatoryLeaveConfirmations,
     })
   }
@@ -216,15 +231,33 @@ export function SettingsPage({
                   Current period: {formatLeaveYearLabel(leaveYear)}
                   {draft.leaveYearConfigured ? ' · Confirmed' : ' · Not confirmed yet'}
                 </p>
-                {draft.leaveYearConfigured && onOpenLeaveYears && (
-                  <button
-                    type="button"
-                    className="button button-secondary"
-                    onClick={onOpenLeaveYears}
-                  >
-                    Review leave year close
-                  </button>
-                )}
+                <div className="settings-inline-actions">
+                  {!draft.leaveYearConfigured && (
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      onClick={() => {
+                        const next = { ...draft, leaveYearConfigured: true }
+                        setDraft(next)
+                        onSave({
+                          ...next,
+                          mandatoryLeaveConfirmations: draft.mandatoryLeaveConfirmations,
+                        })
+                      }}
+                    >
+                      Confirm leave year
+                    </button>
+                  )}
+                  {draft.leaveYearConfigured && onOpenLeaveYears && (
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={onOpenLeaveYears}
+                    >
+                      Review leave year close
+                    </button>
+                  )}
+                </div>
               </div>
             </>
           )}
@@ -439,10 +472,12 @@ export function SettingsPage({
                       }
                     >
                       <option value="days">Days</option>
-                      <option value="hours">Hours</option>
                     </select>
                   </label>
                 </div>
+                <p className="field-helper">
+                  Leave booking currently uses working days. Hours-based entitlement will come later.
+                </p>
                 <EntitlementBasisNote includesBankHolidays={draft.entitlementIncludesBankHolidays} />
               </div>
               <div className="settings-divider" />
@@ -460,7 +495,11 @@ export function SettingsPage({
               <div className="settings-section">
                 <div>
                   <h2>Default roll-over</h2>
-                  <p>Roll-over is off by default. You can add it manually for individual employees.</p>
+                  <p>
+                    When on, leave year close proposes carrying unused leave into the next year. When
+                    off, only deficits are proposed by default (you can still edit). Admins can also
+                    set roll-over on each employee.
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -694,10 +733,12 @@ export function SettingsPage({
                 <button
                   type="button"
                   className="button button-secondary"
-                  onClick={() => onNotify('Admin management opened')}
+                  disabled
+                  title="Admin accounts will be available with authentication"
                 >
                   Manage admins
                 </button>
+                <p className="field-helper">Coming soon with sign-in and roles.</p>
               </div>
             </>
           )}

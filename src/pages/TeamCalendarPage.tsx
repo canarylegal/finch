@@ -17,7 +17,7 @@ type TeamCalendarProps = {
   absences: AbsenceRecord[]
   bankHolidays: BankHoliday[]
   onAddLeave: () => void
-  onNotify: (message: string) => void
+  onViewList: () => void
 }
 
 export function TeamCalendar({
@@ -25,7 +25,7 @@ export function TeamCalendar({
   absences,
   bankHolidays,
   onAddLeave,
-  onNotify,
+  onViewList,
 }: TeamCalendarProps) {
   const [viewDate, setViewDate] = useState(new Date(2026, 8, 1))
   const today = APP_TODAY
@@ -154,7 +154,7 @@ export function TeamCalendar({
             {absences.length} absence entries · {bankHolidaysInView.length} bank{' '}
             {bankHolidaysInView.length === 1 ? 'holiday' : 'holidays'} this month
           </span>
-          <button type="button" className="text-button" onClick={() => onNotify('Showing all leave entries')}>
+          <button type="button" className="text-button" onClick={onViewList}>
             View list <ChevronRight size={14} />
           </button>
         </div>

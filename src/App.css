@@ -1435,6 +1435,42 @@ button {
   font-size: 10px;
 }
 
+.filter-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.filter-select select {
+  appearance: none;
+  gap: 8px;
+  padding: 8px 28px 8px 10px;
+  color: #718587;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.filter-select svg {
+  position: absolute;
+  right: 8px;
+  pointer-events: none;
+  color: #718587;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .employee-count {
   margin-left: auto;
   color: #94a29f;
@@ -2817,6 +2853,11 @@ button.toggle {
   background: #fff0ec;
 }
 
+.request-icon-cancelled {
+  color: #7a8a87;
+  background: #eef1ef;
+}
+
 .modal-tall .leave-history-heading {
   margin-top: 24px;
 }
@@ -3674,6 +3715,13 @@ button.toggle {
   .mandatory-range-row {
     grid-template-columns: 1fr;
   }
+}
+
+.settings-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .leave-year-pending-banner {

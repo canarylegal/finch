@@ -67,6 +67,7 @@ export type StoredLeaveRequest = {
   duration: string
   note: string
   status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled'
+  leaveType?: 'annual' | 'unpaid' | 'other'
   start?: string
   end?: string
   absenceId?: number

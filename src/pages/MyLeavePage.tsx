@@ -22,6 +22,7 @@ import {
   type LeaveAdjustment,
 } from '../leaveAdjustments'
 import { LEAVE_NOT_CONFIGURED_EMPLOYEE_MESSAGE } from '../mandatoryLeave'
+import { leaveRequestTypeLabel } from '../leaveTypes'
 import { messagesForRequest } from '../portalMessages'
 import type { AbsenceRecord, BankHoliday } from '../payroll'
 
@@ -77,7 +78,7 @@ export function MyLeavePage({
     ? requests
         .filter(
           (request) =>
-            request.name === employee.name && requestInLeaveYear(request.start, leaveYear),
+            request.employeeId === employee.id && requestInLeaveYear(request.start, leaveYear),
         )
         .sort((a, b) => (b.start ?? b.dates).localeCompare(a.start ?? a.dates))
     : []
@@ -184,7 +185,9 @@ export function MyLeavePage({
                       ? 'request-icon-pending'
                       : request.status === 'Approved'
                         ? 'request-icon-approved'
-                        : 'request-icon-declined'
+                        : request.status === 'Cancelled'
+                          ? 'request-icon-cancelled'
+                          : 'request-icon-declined'
                   }`}
                 >
                   {request.status === 'Pending' ? (
@@ -198,7 +201,7 @@ export function MyLeavePage({
                 <div className="request-copy">
                   <strong>{request.dates}</strong>
                   <span>
-                    Annual leave · {request.duration}
+                    {leaveRequestTypeLabel(request.leaveType)} · {request.duration}
                     {hasPendingAmendment(request) ? ' · Change pending approval' : ''}
                   </span>
                 </div>

@@ -4,10 +4,12 @@ import type { LeaveYearPeriod } from './leaveYear'
 
 type LeaveRequest = {
   id: number
+  employeeId?: number
   name: string
   dates: string
   duration: string
   status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled'
+  leaveType?: 'annual' | 'unpaid' | 'other'
   start?: string
   end?: string
 }
@@ -29,9 +31,9 @@ export function upcomingApprovedLeave(
     .slice(0, 3)
 }
 
-export function employeeRequestsSorted(requests: LeaveRequest[], employeeName: string) {
+export function employeeRequestsSorted(requests: LeaveRequest[], employeeId: number) {
   return requests
-    .filter((request) => request.name === employeeName)
+    .filter((request) => request.employeeId === employeeId)
     .sort((a, b) => {
       const aKey = a.start ?? a.dates
       const bKey = b.start ?? b.dates
