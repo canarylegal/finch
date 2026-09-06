@@ -7,7 +7,7 @@ type LeaveRequest = {
   name: string
   dates: string
   duration: string
-  status: 'Pending' | 'Approved' | 'Declined'
+  status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled'
   start?: string
   end?: string
 }

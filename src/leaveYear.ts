@@ -63,11 +63,47 @@ export function formatLeaveYearLabel(period: LeaveYearPeriod) {
   return `${start} – ${end}`
 }
 
+/** Period immediately before the given leave year (same company month pattern). */
+export function previousLeaveYearPeriod(
+  period: LeaveYearPeriod,
+  startMonthName: string,
+  endMonthName: string,
+) {
+  const dayBefore = parseIsoDate(period.start)
+  dayBefore.setDate(dayBefore.getDate() - 1)
+  return getLeaveYearPeriod(dayBefore, startMonthName, endMonthName)
+}
+
+/** Period immediately after the given leave year (same company month pattern). */
+export function nextLeaveYearPeriod(
+  period: LeaveYearPeriod,
+  startMonthName: string,
+  endMonthName: string,
+) {
+  const dayAfter = parseIsoDate(period.end)
+  dayAfter.setDate(dayAfter.getDate() + 1)
+  return getLeaveYearPeriod(dayAfter, startMonthName, endMonthName)
+}
+
 export function daysUntilLeaveYearEnd(referenceDate: Date, periodEnd: string) {
   const end = parseIsoDate(periodEnd)
-  const startOfToday = new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate())
+  const startOfToday = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+  )
   const diff = Math.round((end.getTime() - startOfToday.getTime()) / (1000 * 60 * 60 * 24))
   return Math.max(0, diff)
+}
+
+export function isPastLeaveYearEnd(referenceDate: Date, periodEnd: string) {
+  const end = parseIsoDate(periodEnd)
+  const startOfToday = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+  )
+  return startOfToday.getTime() > end.getTime()
 }
 
 export function recordOverlapsPeriod(start: string, end: string, period: LeaveYearPeriod) {

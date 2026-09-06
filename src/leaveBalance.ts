@@ -6,6 +6,7 @@ import {
   type BankHoliday,
 } from './payroll'
 import { absenceInLeaveYear, requestInLeaveYear, type LeaveYearPeriod } from './leaveYear'
+import { leaveAdjustmentNet, type LeaveAdjustment } from './leaveAdjustments'
 
 export type EntitlementMode = 'proRata' | 'custom'
 
@@ -13,7 +14,7 @@ export type LeaveRequestLike = {
   id: number
   name: string
   duration: string
-  status: 'Pending' | 'Approved' | 'Declined'
+  status: 'Pending' | 'Approved' | 'Declined' | 'Cancelled'
   start?: string
 }
 
@@ -182,11 +183,13 @@ export function remainingAnnualLeave(
   leaveYear: LeaveYearPeriod,
   additionalDays = 0,
   excludeRequestId?: number,
+  adjustments: LeaveAdjustment[] = [],
 ) {
   const allowance = totalLeaveAllowance(employee, company, bankHolidays)
+  const adjustmentNet = leaveAdjustmentNet(adjustments, employee.id, leaveYear)
   const taken = annualLeaveTaken(absences, employee.id, employee.workingDays, leaveYear)
   const pending = pendingLeaveDays(requests, employee.name, leaveYear, excludeRequestId)
-  return allowance - taken - pending - additionalDays
+  return allowance + adjustmentNet - taken - pending - additionalDays
 }
 
 export function formatBalanceAmount(amount: number, unit: string) {
