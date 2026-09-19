@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
 import { Download, X } from 'lucide-react'
 import type { PolicyDocument } from '../domain'
+import { useModalA11y } from '../hooks/useModalA11y'
 import { formatPolicyUpdatedAt, policyPreviewKind, readPolicyText } from '../policies'
 
 export function PolicyViewerModal({
@@ -12,14 +12,7 @@ export function PolicyViewerModal({
 }) {
   const kind = policyPreviewKind(policy)
   const text = kind === 'text' ? readPolicyText(policy) : null
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  const dialogRef = useModalA11y(onClose)
 
   const download = () => {
     const link = window.document.createElement('a')
@@ -33,6 +26,7 @@ export function PolicyViewerModal({
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <div
+        ref={dialogRef}
         className="modal modal-wide modal-tall policy-viewer-modal"
         role="dialog"
         aria-modal="true"

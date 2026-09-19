@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { CalendarDays, Check, ChevronRight, Clock3, Pencil, X } from 'lucide-react'
 import { PortalMessageThread } from '../components/PortalMessageThread'
 import {
@@ -27,6 +27,7 @@ import {
 import type { LeaveAdjustment } from '../leaveAdjustments'
 import { type LeaveYearPeriod } from '../leaveYear'
 import { isAnnualLeaveRequest } from '../leaveTypes'
+import { useModalA11y } from '../hooks/useModalA11y'
 import { messagesForRequest } from '../portalMessages'
 import {
   countWorkingDaysInRange,
@@ -84,14 +85,7 @@ export function LeaveRequestDetailModal({
   const [startDate, setStartDate] = useState(defaults.start)
   const [endDate, setEndDate] = useState(defaults.end)
   const [note, setNote] = useState(request.note)
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  const dialogRef = useModalA11y(onClose)
 
   const entitlementSettings = companyEntitlementSettings(company)
   const threadMessages = messagesForRequest(portalMessages, request.id)
@@ -173,6 +167,7 @@ export function LeaveRequestDetailModal({
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <div
+        ref={dialogRef}
         className="modal modal-wide modal-tall leave-request-modal"
         role="dialog"
         aria-modal="true"
