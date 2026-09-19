@@ -49,20 +49,13 @@ export async function fetchBootstrap() {
 }
 
 export async function loginWithPassword(email: string, password: string) {
-  return api<{ account: PublicAccount }>('/api/auth/login', {
+  return api<
+    | { account: PublicAccount; recovery?: undefined }
+    | { recovery: true; displayName: string; hasAccounts: boolean; account?: undefined }
+  >('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   })
-}
-
-export async function loginRecovery(login: string, password: string) {
-  return api<{ recovery: true; displayName: string; hasAccounts: boolean }>(
-    '/api/auth/recovery/login',
-    {
-      method: 'POST',
-      body: JSON.stringify({ login, password }),
-    },
-  )
 }
 
 export async function logoutRequest() {

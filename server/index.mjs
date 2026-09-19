@@ -220,8 +220,17 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required' })
   }
 
-  if (email === masterConfig.login) {
-    return res.status(400).json({ error: 'Use recovery sign-in for the master recovery account' })
+  // Canary-style: try env master recovery on the same endpoint before DB accounts.
+  const masterLoginOk = timingSafeEqualString(email, masterConfig.login)
+  const masterPasswordOk = timingSafeEqualString(password, masterConfig.password)
+  if (masterLoginOk && masterPasswordOk) {
+    const token = signToken({ kind: 'master_recovery' })
+    setSessionCookie(res, token)
+    return res.json({
+      recovery: true,
+      displayName: 'Master recovery',
+      hasAccounts: readStore().accounts.length > 0,
+    })
   }
 
   const store = readStore()
@@ -240,26 +249,6 @@ app.post('/api/auth/login', async (req, res) => {
   const token = signToken({ kind: 'account', accountId: account.id })
   setSessionCookie(res, token)
   return res.json({ account: publicAccount(account) })
-})
-
-app.post('/api/auth/recovery/login', (req, res) => {
-  const login = String(req.body?.login || '')
-    .trim()
-    .toLowerCase()
-  const password = String(req.body?.password || '')
-  const loginOk = timingSafeEqualString(login, masterConfig.login)
-  const passwordOk = timingSafeEqualString(password, masterConfig.password)
-  if (!loginOk || !passwordOk) {
-    return res.status(401).json({ error: 'Recovery login or password is incorrect' })
-  }
-
-  const token = signToken({ kind: 'master_recovery' })
-  setSessionCookie(res, token)
-  return res.json({
-    recovery: true,
-    displayName: 'Master recovery',
-    hasAccounts: readStore().accounts.length > 0,
-  })
 })
 
 app.post('/api/auth/logout', (_req, res) => {
