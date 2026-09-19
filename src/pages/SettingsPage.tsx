@@ -42,7 +42,6 @@ export function SettingsPage({
   onOpenLeaveYears,
   onUpdateAccount,
   onAddAccount,
-  onResetAppData,
 }: {
   company: CompanySettings
   bankHolidays: BankHoliday[]
@@ -64,7 +63,6 @@ export function SettingsPage({
     password: string
     jobTitle?: string
   }) => Promise<string | null>
-  onResetAppData: () => void
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   const [draft, setDraft] = useState(company)
@@ -74,8 +72,10 @@ export function SettingsPage({
   const [newAccountName, setNewAccountName] = useState('')
   const [newAccountRole, setNewAccountRole] = useState<AccountRole>('employee')
   const [newAccountEmployeeId, setNewAccountEmployeeId] = useState<number | ''>('')
-  const [newAccountPassword, setNewAccountPassword] = useState('demo')
+  const [newAccountPassword, setNewAccountPassword] = useState('')
   const [addAccountBusy, setAddAccountBusy] = useState(false)
+  const currentAccount = accounts.find((item) => item.id === currentAccountId)
+  const currentIsPrimary = Boolean(currentAccount?.isPrimary)
 
   useEffect(() => {
     setDraft(company)
@@ -770,6 +770,7 @@ export function SettingsPage({
                       ? employees.find((item) => item.id === account.employeeId)
                       : undefined
                     const isSelf = account.id === currentAccountId
+                    const isPrimary = Boolean(account.isPrimary)
                     const isLastAdmin =
                       account.role === 'admin' &&
                       account.status === 'Active' &&
@@ -780,6 +781,7 @@ export function SettingsPage({
                           <strong>
                             {account.displayName}
                             {isSelf ? ' (you)' : ''}
+                            {isPrimary ? ' · primary' : ''}
                           </strong>
                           <span>
                             {account.email} · {account.role}
@@ -792,8 +794,14 @@ export function SettingsPage({
                             <button
                               type="button"
                               className="button button-secondary"
-                              disabled={isLastAdmin}
-                              title={isLastAdmin ? 'Keep at least one active admin' : undefined}
+                              disabled={isLastAdmin || isPrimary}
+                              title={
+                                isPrimary
+                                  ? 'Transfer primary ownership before removing admin'
+                                  : isLastAdmin
+                                    ? 'Keep at least one active admin'
+                                    : undefined
+                              }
                               onClick={() =>
                                 onUpdateAccount({ ...account, role: 'employee' })
                               }
@@ -813,13 +821,15 @@ export function SettingsPage({
                             <button
                               type="button"
                               className="button button-secondary"
-                              disabled={isSelf || isLastAdmin}
+                              disabled={isSelf || isLastAdmin || isPrimary}
                               title={
-                                isSelf
-                                  ? 'You cannot deactivate your own account'
-                                  : isLastAdmin
-                                    ? 'Keep at least one active admin'
-                                    : undefined
+                                isPrimary
+                                  ? 'Cannot deactivate the primary admin'
+                                  : isSelf
+                                    ? 'You cannot deactivate your own account'
+                                    : isLastAdmin
+                                      ? 'Keep at least one active admin'
+                                      : undefined
                               }
                               onClick={() =>
                                 onUpdateAccount({ ...account, status: 'Inactive' })
@@ -836,6 +846,17 @@ export function SettingsPage({
                               }
                             >
                               Activate
+                            </button>
+                          )}
+                          {currentIsPrimary && !isPrimary && (
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              onClick={() =>
+                                onUpdateAccount({ ...account, isPrimary: true, role: 'admin' })
+                              }
+                            >
+                              Make primary
                             </button>
                           )}
                         </div>
@@ -939,7 +960,7 @@ export function SettingsPage({
                           setNewAccountName('')
                           setNewAccountRole('employee')
                           setNewAccountEmployeeId('')
-                          setNewAccountPassword('demo')
+                          setNewAccountPassword('')
                         }}
                       >
                         Create account
@@ -951,25 +972,12 @@ export function SettingsPage({
               <div className="settings-divider" />
               <div className="settings-section settings-section-stack">
                 <div>
-                  <h2>Reset local data</h2>
+                  <h2>Data management</h2>
                   <p>
-                    Clear all stored company data on this browser and restore the starter
-                    dataset. You will be signed out.
+                    Use master recovery sign-in to manage break-glass account access after a
+                    deployment wipe.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="button button-secondary danger-text-button"
-                  onClick={() => {
-                    const proceed = window.confirm(
-                      'Reset all Finch data on this browser to the starter dataset? This cannot be undone.',
-                    )
-                    if (!proceed) return
-                    onResetAppData()
-                  }}
-                >
-                  Reset to starter data
-                </button>
               </div>
             </>
           )}

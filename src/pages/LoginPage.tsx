@@ -1,24 +1,18 @@
 import { useState, type FormEvent } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { FinchMark } from '../components/FinchMark'
-import {
-  DEMO_ACCOUNT_HINTS,
-  DEMO_PASSWORD,
-  authenticate,
-  saveSession,
-  type Account,
-} from '../auth'
-import { toIsoDate } from '../calendarUtils'
-import { APP_TODAY } from '../domain'
+import { loginRecovery, loginWithPassword, type PublicAccount } from '../api'
 
 export function LoginPage({
-  accounts,
   onSignedIn,
+  onRecoverySignedIn,
 }: {
-  accounts: Account[]
-  onSignedIn: (account: Account) => void
+  onSignedIn: (account: PublicAccount) => void
+  onRecoverySignedIn: () => void
 }) {
+  const [mode, setMode] = useState<'account' | 'recovery'>('account')
   const [email, setEmail] = useState('')
+  const [recoveryLogin, setRecoveryLogin] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -28,13 +22,21 @@ export function LoginPage({
     setError('')
     setBusy(true)
     try {
-      const result = await authenticate(accounts, email, password)
+      if (mode === 'recovery') {
+        const result = await loginRecovery(recoveryLogin, password)
+        if (!result.ok) {
+          setError(result.error)
+          return
+        }
+        onRecoverySignedIn()
+        return
+      }
+      const result = await loginWithPassword(email, password)
       if (!result.ok) {
         setError(result.error)
         return
       }
-      saveSession({ accountId: result.account.id, signedInAt: toIsoDate(APP_TODAY) })
-      onSignedIn(result.account)
+      onSignedIn(result.data.account)
     } finally {
       setBusy(false)
     }
@@ -51,19 +53,36 @@ export function LoginPage({
             finch<span className="brand-dot">.</span>
           </span>
         </div>
-        <h1>Sign in</h1>
-        <p className="login-lede">Use your Northstar Studio account to open Finch.</p>
+        <h1>{mode === 'recovery' ? 'Recovery sign-in' : 'Sign in'}</h1>
+        <p className="login-lede">
+          {mode === 'recovery'
+            ? 'Master recovery access for break-glass account management.'
+            : 'Sign in with your Finch account.'}
+        </p>
         <form className="login-form" onSubmit={handleSubmit}>
-          <label>
-            Email
-            <input
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-          </label>
+          {mode === 'account' ? (
+            <label>
+              Email
+              <input
+                type="email"
+                autoComplete="username"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                required
+              />
+            </label>
+          ) : (
+            <label>
+              Recovery login
+              <input
+                type="text"
+                autoComplete="username"
+                value={recoveryLogin}
+                onChange={(event) => setRecoveryLogin(event.target.value)}
+                required
+              />
+            </label>
+          )}
           <label>
             Password
             <input
@@ -80,30 +99,17 @@ export function LoginPage({
             <ChevronRight size={15} />
           </button>
         </form>
-        <div className="login-demo">
-          <strong>Demo accounts</strong>
-          <p>Password for all accounts: <code>{DEMO_PASSWORD}</code></p>
-          <ul>
-            {DEMO_ACCOUNT_HINTS.map((hint) => (
-              <li key={hint.email}>
-                <button
-                  type="button"
-                  className="login-demo-fill"
-                  onClick={() => {
-                    setEmail(hint.email)
-                    setPassword(DEMO_PASSWORD)
-                    setError('')
-                  }}
-                >
-                  <span>{hint.displayName}</span>
-                  <small>
-                    {hint.role} · {hint.email}
-                  </small>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
+        <p className="login-switch">
+          {mode === 'account' ? (
+            <button type="button" className="text-link-button" onClick={() => setMode('recovery')}>
+              Master recovery sign-in
+            </button>
+          ) : (
+            <button type="button" className="text-link-button" onClick={() => setMode('account')}>
+              Back to account sign-in
+            </button>
+          )}
+        </p>
       </div>
     </div>
   )

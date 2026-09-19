@@ -16,14 +16,7 @@ import {
   adminNavItems,
   companyEntitlementSettings,
   companyInitials,
-  defaultCompanySettings,
-  initialEmployees,
-  initialDocumentFolders,
-  initialEmployeeDocuments,
-  initialPortalMessages,
-  initialRequests,
   navItems,
-  readPersistedState,
   type CompanySettings,
   type DocumentFolderVisibility,
   type Employee,
@@ -33,6 +26,15 @@ import {
   type RequestStatus,
   type SettingsTab,
 } from './domain'
+import { emptyRuntimeData } from './emptyState'
+import {
+  createAccountRequest,
+  fetchAppData,
+  fetchMe,
+  logoutRequest,
+  saveAppData,
+  updateAccountRequest,
+} from './api'
 import { getLeaveYearPeriod } from './leaveYear'
 import {
   leaveDaysInLeaveYear,
@@ -55,19 +57,10 @@ import {
   buildLeaveRequestFields,
 } from './leaveRequestHelpers'
 import { createPortalMessage } from './portalMessages'
-import {
-  activeAdminCount,
-  accountInitialsFromName,
-  clearSession,
-  createAccountCredentials,
-  ensureAccounts,
-  initialAccounts,
-  loadSession,
-  nextAccountId,
-  resolveSessionAccount,
-  type Account,
-} from './auth'
+import { type Account } from './auth'
 import { LoginPage } from './pages/LoginPage'
+import { RecoveryConsole } from './pages/RecoveryConsole'
+import { OrgSetupWizard } from './pages/OrgSetupWizard'
 import {
   createDefaultFoldersForEmployee,
   documentCountInFolder,
@@ -97,16 +90,13 @@ import { Policies } from './pages/PoliciesPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TeamCalendar } from './pages/TeamCalendarPage'
 import {
-  ENGLAND_WALES_BANK_HOLIDAYS_2026,
   countWorkingDaysInRange,
   formatDisplayDate,
-  initialAbsences,
   type AbsenceRecord,
   type BankHoliday,
 } from './payroll'
 import {
   formatGbp,
-  initialExpenseClaims,
   nextExpenseClaimId,
   pendingExpenseCount,
 } from './expenses'
@@ -123,7 +113,6 @@ import {
   leaveRequestTypeFromLabel,
 } from './leaveTypes'
 import {
-  initialPolicies,
   nextPolicyAccent,
   nextPolicyId,
 } from './policies'
@@ -137,51 +126,35 @@ import {
   nextLeaveAdjustmentId,
   type LeaveAdjustment,
 } from './leaveAdjustments'
-import { saveFinchAppData, clearFinchAppData } from './storage'
 import { findLeaveConflicts, overlapWarningMessage } from './leaveOverlap'
 import './App.css'
 
+type BootState = 'loading' | 'login' | 'recovery' | 'ready'
+
 function App() {
-  const persisted = readPersistedState()
-  const [accounts, setAccounts] = useState<Account[]>(
-    () => ensureAccounts(persisted?.accounts ?? initialAccounts()),
-  )
-  const [sessionAccount, setSessionAccount] = useState<Account | null>(() =>
-    resolveSessionAccount(ensureAccounts(persisted?.accounts ?? initialAccounts()), loadSession()),
-  )
+  const empty = emptyRuntimeData()
+  const [bootState, setBootState] = useState<BootState>('loading')
+  const [accounts, setAccounts] = useState<Account[]>(empty.accounts)
+  const [sessionAccount, setSessionAccount] = useState<Account | null>(null)
   const [activeNav, setActiveNav] = useState('Overview')
-  const [requests, setRequests] = useState(persisted?.requests ?? initialRequests)
-  const [portalMessages, setPortalMessages] = useState(
-    persisted?.portalMessages ?? initialPortalMessages,
-  )
-  const [employees, setEmployees] = useState(persisted?.employees ?? initialEmployees)
-  const [employeeDocuments, setEmployeeDocuments] = useState(
-    persisted?.employeeDocuments ?? initialEmployeeDocuments,
-  )
-  const [documentFolders, setDocumentFolders] = useState(
-    persisted?.documentFolders ?? initialDocumentFolders,
-  )
-  const [expenseClaims, setExpenseClaims] = useState(
-    persisted?.expenseClaims ?? initialExpenseClaims,
-  )
-  const [taskDismissals, setTaskDismissals] = useState<TaskDismissal[]>(
-    persisted?.taskDismissals ?? [],
-  )
-  const [policies, setPolicies] = useState(persisted?.policies ?? initialPolicies)
+  const [requests, setRequests] = useState(empty.requests)
+  const [portalMessages, setPortalMessages] = useState(empty.portalMessages)
+  const [employees, setEmployees] = useState(empty.employees)
+  const [employeeDocuments, setEmployeeDocuments] = useState(empty.employeeDocuments)
+  const [documentFolders, setDocumentFolders] = useState(empty.documentFolders)
+  const [expenseClaims, setExpenseClaims] = useState(empty.expenseClaims)
+  const [taskDismissals, setTaskDismissals] = useState<TaskDismissal[]>(empty.taskDismissals)
+  const [policies, setPolicies] = useState(empty.policies)
   const [leaveAdjustments, setLeaveAdjustments] = useState<LeaveAdjustment[]>(
-    persisted?.leaveAdjustments ?? [],
+    empty.leaveAdjustments,
   )
   const [leaveYearClosures, setLeaveYearClosures] = useState<LeaveYearClosure[]>(
-    persisted?.leaveYearClosures ?? [],
+    empty.leaveYearClosures,
   )
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('company')
-  const [absences, setAbsences] = useState<AbsenceRecord[]>(persisted?.absences ?? initialAbsences)
-  const [bankHolidays, setBankHolidays] = useState<BankHoliday[]>(
-    persisted?.bankHolidays ?? ENGLAND_WALES_BANK_HOLIDAYS_2026,
-  )
-  const [company, setCompany] = useState<CompanySettings>(
-    persisted?.company ?? defaultCompanySettings,
-  )
+  const [absences, setAbsences] = useState<AbsenceRecord[]>(empty.absences)
+  const [bankHolidays, setBankHolidays] = useState<BankHoliday[]>(empty.bankHolidays)
+  const [company, setCompany] = useState<CompanySettings>(empty.company)
   const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false)
   const [isAdminLeaveModalOpen, setIsAdminLeaveModalOpen] = useState(false)
   const [isRecordAbsenceOpen, setIsRecordAbsenceOpen] = useState(false)
@@ -196,18 +169,87 @@ function App() {
   const [toast, setToast] = useState('')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
-  const persistAppData = (overrides: {
+  const applyAppData = (data: Record<string, unknown>) => {
+    const fallback = emptyRuntimeData()
+    setAccounts(Array.isArray(data.accounts) ? (data.accounts as Account[]) : fallback.accounts)
+    setEmployees(Array.isArray(data.employees) ? (data.employees as typeof employees) : fallback.employees)
+    setAbsences(Array.isArray(data.absences) ? (data.absences as AbsenceRecord[]) : fallback.absences)
+    setCompany(
+      data.company && typeof data.company === 'object'
+        ? { ...fallback.company, ...(data.company as CompanySettings) }
+        : fallback.company,
+    )
+    setBankHolidays(
+      Array.isArray(data.bankHolidays) ? (data.bankHolidays as BankHoliday[]) : fallback.bankHolidays,
+    )
+    setRequests(Array.isArray(data.requests) ? (data.requests as typeof requests) : fallback.requests)
+    setPortalMessages(
+      Array.isArray(data.portalMessages)
+        ? (data.portalMessages as typeof portalMessages)
+        : fallback.portalMessages,
+    )
+    setDocumentFolders(
+      Array.isArray(data.documentFolders)
+        ? (data.documentFolders as typeof documentFolders)
+        : fallback.documentFolders,
+    )
+    setEmployeeDocuments(
+      Array.isArray(data.employeeDocuments)
+        ? (data.employeeDocuments as typeof employeeDocuments)
+        : fallback.employeeDocuments,
+    )
+    setExpenseClaims(
+      Array.isArray(data.expenseClaims)
+        ? (data.expenseClaims as typeof expenseClaims)
+        : fallback.expenseClaims,
+    )
+    setTaskDismissals(
+      Array.isArray(data.taskDismissals)
+        ? (data.taskDismissals as TaskDismissal[])
+        : fallback.taskDismissals,
+    )
+    setPolicies(Array.isArray(data.policies) ? (data.policies as typeof policies) : fallback.policies)
+    setLeaveAdjustments(
+      Array.isArray(data.leaveAdjustments)
+        ? (data.leaveAdjustments as LeaveAdjustment[])
+        : fallback.leaveAdjustments,
+    )
+    setLeaveYearClosures(
+      Array.isArray(data.leaveYearClosures)
+        ? (data.leaveYearClosures as LeaveYearClosure[])
+        : fallback.leaveYearClosures,
+    )
+  }
+
+  const loadAppDataForSession = async (account: Account) => {
+    const result = await fetchAppData()
+    if (!result.ok) {
+      setSessionAccount(null)
+      setBootState('login')
+      setToast(result.error)
+      window.setTimeout(() => setToast(''), 2800)
+      return false
+    }
+    applyAppData(result.data)
+    setSessionAccount(account)
+    setActiveNav('Overview')
+    setBootState('ready')
+    return true
+  }
+
+  const persistAppData = async (overrides: {
     expenseClaims?: typeof expenseClaims
     taskDismissals?: TaskDismissal[]
     policies?: typeof policies
     leaveAdjustments?: LeaveAdjustment[]
     leaveYearClosures?: LeaveYearClosure[]
     accounts?: Account[]
-  } = {}) =>
-    saveFinchAppData({
+    company?: CompanySettings
+  } = {}) => {
+    const result = await saveAppData({
       employees,
       absences,
-      company,
+      company: overrides.company ?? company,
       bankHolidays,
       requests,
       portalMessages,
@@ -220,10 +262,34 @@ function App() {
       leaveAdjustments: overrides.leaveAdjustments ?? leaveAdjustments,
       leaveYearClosures: overrides.leaveYearClosures ?? leaveYearClosures,
     })
+    return result.ok
+  }
 
   useEffect(() => {
-    persistAppData()
+    localStorage.removeItem('finch-app-data')
+    localStorage.removeItem('finch-session')
+    void (async () => {
+      const me = await fetchMe()
+      if (!me.ok) {
+        setBootState('login')
+        return
+      }
+      if (me.data.kind === 'master_recovery') {
+        setBootState('recovery')
+        return
+      }
+      const loaded = await loadAppDataForSession(me.data.account)
+      if (!loaded) return
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once on mount
+  }, [])
+
+  useEffect(() => {
+    if (bootState !== 'ready') return
+    void persistAppData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- persist when data slices change
   }, [
+    bootState,
     employees,
     absences,
     company,
@@ -264,9 +330,10 @@ function App() {
     window.setTimeout(() => setToast(''), 2800)
   }
 
-  const signOut = () => {
-    clearSession()
+  const signOut = async () => {
+    await logoutRequest()
     setSessionAccount(null)
+    setBootState('login')
     setActiveNav('Overview')
     setMobileNavOpen(false)
     notify('Signed out')
@@ -697,12 +764,6 @@ function App() {
     notify('Absence removed')
   }
 
-  const resetAppData = () => {
-    clearFinchAppData()
-    clearSession()
-    window.location.reload()
-  }
-
   const saveCompanySettings = (next: CompanySettings) => {
     const previousConfirmation = confirmationForLeaveYear(
       company.mandatoryLeaveConfirmations,
@@ -857,11 +918,6 @@ function App() {
       },
     ]
 
-    if (!persistAppData({ expenseClaims: nextClaims })) {
-      notify('Could not save this claim — receipts are too large for browser storage. Try fewer or smaller files.')
-      return false
-    }
-
     setExpenseClaims(nextClaims)
     setIsExpenseModalOpen(false)
     notify('Expense claim sent to Alex')
@@ -885,11 +941,6 @@ function App() {
           }
         : item,
     )
-
-    if (!persistAppData({ expenseClaims: nextClaims })) {
-      notify('Could not save — browser storage is full.')
-      return
-    }
 
     setExpenseClaims(nextClaims)
     setActiveExpenseClaimId(null)
@@ -967,10 +1018,6 @@ function App() {
         accent: nextPolicyAccent(policies),
       },
     ]
-    if (!persistAppData({ policies: nextPolicies })) {
-      notify('Could not save this policy — the file is too large for browser storage.')
-      return false
-    }
     setPolicies(nextPolicies)
     notify('Policy added')
     return true
@@ -999,10 +1046,6 @@ function App() {
           }
         : policy,
     )
-    if (!persistAppData({ policies: nextPolicies })) {
-      notify('Could not save — browser storage is full.')
-      return false
-    }
     setPolicies(nextPolicies)
     notify('Policy updated')
     return true
@@ -1209,19 +1252,77 @@ function App() {
     )
   }
 
-  if (!sessionAccount) {
+  if (bootState === 'loading') {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          fontFamily: 'inherit',
+        }}
+      >
+        Loading Finch…
+      </div>
+    )
+  }
+
+  if (bootState === 'recovery') {
+    return <RecoveryConsole onSignedOut={() => setBootState('login')} />
+  }
+
+  if (bootState === 'login' || !sessionAccount) {
     return (
       <>
         <LoginPage
-          accounts={accounts}
           onSignedIn={(account) => {
-            setSessionAccount(account)
-            setActiveNav('Overview')
-            notify(`Signed in as ${account.displayName}`)
+            void (async () => {
+              const loaded = await loadAppDataForSession(account)
+              if (loaded) notify(`Signed in as ${account.displayName}`)
+            })()
           }}
+          onRecoverySignedIn={() => setBootState('recovery')}
         />
         {toast && <div className="toast">{toast}</div>}
       </>
+    )
+  }
+
+  if (!company.leaveYearConfigured && sessionAccount.role === 'admin') {
+    return (
+      <>
+        <OrgSetupWizard
+          company={company}
+          onComplete={(next) => {
+            setCompany(next)
+            void persistAppData({ company: next })
+            notify('Organisation configured')
+          }}
+        />
+        {toast && (
+          <div className="toast">
+            <Check size={16} />
+            {toast}
+          </div>
+        )}
+      </>
+    )
+  }
+
+  if (!company.leaveYearConfigured) {
+    return (
+      <div className="login-shell">
+        <div className="login-panel">
+          <h1>Organisation is not set up yet</h1>
+          <p className="login-lede">
+            An admin needs to finish organisation setup before you can use Finch.
+          </p>
+          <button type="button" className="button button-secondary" onClick={() => void signOut()}>
+            Sign out
+          </button>
+        </div>
+        {toast && <div className="toast">{toast}</div>}
+      </div>
     )
   }
 
@@ -1547,64 +1648,78 @@ function App() {
             onNotify={notify}
             onOpenLeaveYears={() => handleNavigation('Leave years')}
             onUpdateAccount={(account) => {
-              if (
-                account.role !== 'admin' &&
-                account.id !== sessionAccount.id &&
-                accounts.find((item) => item.id === account.id)?.role === 'admin' &&
-                activeAdminCount(accounts) <= 1
-              ) {
-                notify('Keep at least one active admin')
-                return
-              }
-              if (
-                account.status === 'Inactive' &&
-                account.role === 'admin' &&
-                activeAdminCount(accounts.filter((item) => item.id !== account.id)) < 1 &&
-                accounts.find((item) => item.id === account.id)?.status === 'Active'
-              ) {
-                notify('Keep at least one active admin')
-                return
-              }
-              setAccounts((current) =>
-                current.map((item) => (item.id === account.id ? account : item)),
-              )
-              if (account.id === sessionAccount.id) {
-                if (account.status === 'Inactive') {
-                  signOut()
+              void (async () => {
+                const previous = accounts.find((item) => item.id === account.id)
+                const payload: Record<string, unknown> = {
+                  role: account.role,
+                  status: account.status,
+                }
+                if (account.isPrimary && !previous?.isPrimary) {
+                  const confirmPassword = window.prompt(
+                    'Confirm your password to transfer primary ownership',
+                  )
+                  if (!confirmPassword) {
+                    notify('Primary transfer cancelled')
+                    return
+                  }
+                  payload.isPrimary = true
+                  payload.confirmPassword = confirmPassword
+                }
+                if (Object.prototype.hasOwnProperty.call(account, 'employeeId')) {
+                  payload.employeeId = account.employeeId
+                }
+                if (account.displayName) payload.displayName = account.displayName
+                if (account.jobTitle !== undefined) payload.jobTitle = account.jobTitle
+
+                const result = await updateAccountRequest(account.id, payload)
+                if (!result.ok) {
+                  notify(result.error)
                   return
                 }
-                setSessionAccount(account)
-                if (account.role !== 'admin' && activeNav === 'Settings') {
-                  setActiveNav('Overview')
+                if (result.data.accounts) {
+                  setAccounts(result.data.accounts)
+                } else {
+                  setAccounts((current) =>
+                    current.map((item) =>
+                      item.id === result.data.account.id ? result.data.account : item,
+                    ),
+                  )
                 }
-              }
-              notify(`${account.displayName} updated`)
+                const updated = result.data.account
+                if (updated.id === sessionAccount.id) {
+                  if (updated.status === 'Inactive') {
+                    void signOut()
+                    return
+                  }
+                  setSessionAccount(updated)
+                  if (updated.role !== 'admin' && activeNav === 'Settings') {
+                    setActiveNav('Overview')
+                  }
+                }
+                notify(`${updated.displayName} updated`)
+              })()
             }}
             onAddAccount={async (payload) => {
               const email = payload.email.trim().toLowerCase()
               if (!email || !payload.displayName.trim() || !payload.password) {
                 return 'Email, name, and password are required'
               }
-              if (accounts.some((item) => item.email.toLowerCase() === email)) {
-                return 'An account with that email already exists'
+              if (payload.password.length < 10) {
+                return 'Password must be at least 10 characters'
               }
-              const credentials = await createAccountCredentials(payload.password)
-              const account: Account = {
-                id: nextAccountId(accounts),
+              const result = await createAccountRequest({
                 email,
                 displayName: payload.displayName.trim(),
-                initials: accountInitialsFromName(payload.displayName),
                 role: payload.role,
                 employeeId: payload.employeeId,
-                status: 'Active',
+                password: payload.password,
                 jobTitle: payload.jobTitle,
-                ...credentials,
-              }
-              setAccounts((current) => [...current, account])
-              notify(`Account created for ${account.displayName}`)
+              })
+              if (!result.ok) return result.error
+              setAccounts((current) => [...current, result.data.account])
+              notify(`Account created for ${result.data.account.displayName}`)
               return null
             }}
-            onResetAppData={resetAppData}
           />
         )}
       </main>

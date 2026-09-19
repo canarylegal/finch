@@ -16,7 +16,7 @@ import { ENGLAND_WALES_BANK_HOLIDAYS_2026, normalizeWorkingDays, type AbsenceRec
 import { migrateDocumentsToFolders } from './employeeDocuments'
 import { withEmploymentDates } from './hrTasks'
 import type { MandatoryLeaveConfirmation } from './mandatoryLeave'
-import { ensureAccounts, type Account } from './auth'
+import type { Account } from './auth'
 import { loadFinchAppData } from './storage'
 import type { EntitlementMode } from './leaveBalance'
 import type { LeaveRequestType } from './leaveTypes'
@@ -422,7 +422,7 @@ export const adminNavItems = [
 ]
 
 export const defaultCompanySettings: CompanySettings = {
-  name: 'Northstar Studio',
+  name: '',
   logoUrl: null,
   leaveYearStart: 'January',
   leaveYearEnd: 'December',
@@ -585,7 +585,7 @@ export function readPersistedState() {
           }
         : document,
     ),
-    accounts: ensureAccounts(stored.accounts as Account[] | undefined),
+    accounts: (stored.accounts as Account[] | undefined) ?? [],
     expenseClaims: stored.expenseClaims,
     taskDismissals: stored.taskDismissals ?? [],
     policies: stored.policies,

@@ -114,6 +114,32 @@ button {
   font-size: 12px;
 }
 
+.login-switch {
+  margin-top: 18px;
+  text-align: center;
+}
+
+.text-link-button {
+  border: 0;
+  background: transparent;
+  color: #2f6f64;
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+
+.recovery-panel {
+  max-width: 640px;
+  width: min(640px, 100%);
+}
+
+.recovery-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 18px 0;
+}
+
 .login-form .button {
   margin-top: 4px;
   justify-content: center;
