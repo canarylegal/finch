@@ -17,10 +17,14 @@ function listFocusable(container: HTMLElement) {
 
 /**
  * Dialog a11y: initial focus, Tab containment, Escape close, restore focus on unmount.
+ * Setup/cleanup is mount-lifetime only; onClose is read through a ref so parent
+ * re-renders (e.g. toast clear) do not reset keyboard focus inside the dialog.
  */
 export function useModalA11y(onClose: () => void) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
 
   useEffect(() => {
     previouslyFocused.current =
@@ -41,7 +45,7 @@ export function useModalA11y(onClose: () => void) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (event.key !== 'Tab') return
@@ -76,7 +80,7 @@ export function useModalA11y(onClose: () => void) {
       window.removeEventListener('keydown', onKeyDown)
       previouslyFocused.current?.focus?.()
     }
-  }, [onClose])
+  }, [])
 
   return dialogRef
 }
