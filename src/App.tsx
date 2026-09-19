@@ -554,24 +554,62 @@ function App() {
 
     if (status === 'Approved' && request && employee) {
       const days = parseDurationDays(request.duration)
-      const newAbsenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
-      setAbsences((current) => [
-        ...current,
-        {
-          employeeId: employee.id,
-          type: absenceTypeForLeaveRequest(request.leaveType),
-          start: request.start ?? toIsoDate(APP_TODAY),
-          end: request.end ?? request.start ?? toIsoDate(APP_TODAY),
-          amount: days,
-          note: request.note || 'Approved leave request',
-          recordedBy: actorDisplayName,
-          id: newAbsenceId,
-          recordedAt: toIsoDate(APP_TODAY),
-        },
-      ])
+      const start = request.start ?? toIsoDate(APP_TODAY)
+      const end = request.end ?? request.start ?? toIsoDate(APP_TODAY)
+      const leaveType = absenceTypeForLeaveRequest(request.leaveType)
+      const existingOrphan = absences.find(
+        (item) =>
+          item.employeeId === employee.id &&
+          item.type === leaveType &&
+          item.start === start &&
+          item.end === end &&
+          !requests.some(
+            (other) => other.absenceId === item.id && other.id !== request.id,
+          ),
+      )
+      const newAbsenceId =
+        existingOrphan?.id ?? Math.max(0, ...absences.map((item) => item.id)) + 1
+
+      if (!existingOrphan) {
+        setAbsences((current) => [
+          ...current,
+          {
+            employeeId: employee.id,
+            type: leaveType,
+            start,
+            end,
+            amount: days,
+            note: request.note || 'Approved leave request',
+            recordedBy: actorDisplayName,
+            id: newAbsenceId,
+            recordedAt: toIsoDate(APP_TODAY),
+          },
+        ])
+      }
       setRequests((current) =>
         current.map((item) =>
           item.id === id ? { ...item, status: 'Approved', absenceId: newAbsenceId } : item,
+        ),
+      )
+    } else if (status === 'Declined' && request) {
+      setAbsences((current) =>
+        current.filter((item) => {
+          if (request.absenceId != null && item.id === request.absenceId) return false
+          if (
+            item.type === absenceTypeForLeaveRequest(request.leaveType) &&
+            item.employeeId === request.employeeId &&
+            item.start === request.start &&
+            item.end === request.end &&
+            !requests.some((other) => other.id !== request.id && other.absenceId === item.id)
+          ) {
+            return false
+          }
+          return true
+        }),
+      )
+      setRequests((current) =>
+        current.map((item) =>
+          item.id === id ? { ...item, status: 'Declined', absenceId: undefined } : item,
         ),
       )
     } else {

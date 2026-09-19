@@ -453,35 +453,25 @@ export function companyInitials(name: string) {
 }
 
 /**
- * Drop annual absences that mirror a Pending request for the same employee/dates
- * but were never linked via absenceId (legacy seed inconsistency).
+ * Drop annual absences that are not linked to an Approved request via absenceId.
+ * Covers legacy Pending mirrors, Declined leftovers, and amendment date ghosts.
  */
-export function scrubOrphanPendingAbsences(
+export function scrubOrphanLeaveAbsences(
   absences: AbsenceRecord[],
-  requests: { employeeId?: number; status: string; start?: string; end?: string; absenceId?: number }[],
+  requests: { status: string; absenceId?: number }[],
 ) {
-  const linkedIds = new Set(
-    requests.map((request) => request.absenceId).filter((id): id is number => id != null),
-  )
-  const pendingKeys = new Set(
+  const linkedApprovedIds = new Set(
     requests
-      .filter(
-        (request) =>
-          request.status === 'Pending' &&
-          request.employeeId != null &&
-          request.start &&
-          request.end &&
-          request.absenceId == null,
-      )
-      .map((request) => `${request.employeeId}|${request.start}|${request.end}`),
+      .filter((request) => request.status === 'Approved' && request.absenceId != null)
+      .map((request) => request.absenceId as number),
   )
-  return absences.filter((absence) => {
-    if (linkedIds.has(absence.id)) return true
-    if (absence.type !== 'annual_leave') return true
-    const key = `${absence.employeeId}|${absence.start}|${absence.end}`
-    return !pendingKeys.has(key)
-  })
+  return absences.filter(
+    (absence) => absence.type !== 'annual_leave' || linkedApprovedIds.has(absence.id),
+  )
 }
+
+/** @deprecated Use scrubOrphanLeaveAbsences */
+export const scrubOrphanPendingAbsences = scrubOrphanLeaveAbsences
 
 export function readPersistedState() {
   const stored = loadFinchAppData()
@@ -505,13 +495,21 @@ export function readPersistedState() {
     stored.documentFolders ?? [],
     stored.employeeDocuments ?? [],
   )
-  const requests = stored.requests.map((request) => ({
-    ...request,
-    employeeId:
+  const requests = stored.requests.map((request) => {
+    const employeeId =
       request.employeeId ??
       stored.employees.find((employee) => employee.name === request.name)?.id ??
-      0,
-  }))
+      0
+    const clearedLink =
+      request.status === 'Declined' || request.status === 'Cancelled'
+        ? { absenceId: undefined }
+        : {}
+    return {
+      ...request,
+      employeeId,
+      ...clearedLink,
+    }
+  })
   return {
     employees: stored.employees.map((employee) =>
       withEmploymentDates({
@@ -521,7 +519,7 @@ export function readPersistedState() {
         entitlementUnit: employee.entitlementUnit === 'hours' ? 'days' : employee.entitlementUnit,
       }),
     ),
-    absences: scrubOrphanPendingAbsences(stored.absences, requests),
+    absences: scrubOrphanLeaveAbsences(stored.absences, requests),
     company,
     bankHolidays: stored.bankHolidays ?? ENGLAND_WALES_BANK_HOLIDAYS_2026,
     requests,
