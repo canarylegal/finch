@@ -119,6 +119,7 @@ import {
 import {
   absenceTypeForLeaveRequest,
   isAnnualLeaveRequest,
+  leaveRequestTypeFromAbsenceType,
   leaveRequestTypeFromLabel,
 } from './leaveTypes'
 import {
@@ -1045,7 +1046,46 @@ function App() {
   }
 
   const recordAbsence = (record: Omit<AbsenceRecord, 'id' | 'recordedAt'>) => {
-    addAbsence(record)
+    const leaveType = leaveRequestTypeFromAbsenceType(record.type)
+    const employee = employees.find((item) => item.id === record.employeeId)
+
+    if (leaveType && employee) {
+      // Request-backed leave types need an Approved request + absenceId so reload
+      // scrubbing does not treat them as legacy orphans (F10).
+      const absenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
+      const requestId = Math.max(0, ...requests.map((item) => item.id)) + 1
+      const fields = buildLeaveRequestFields(
+        record.start,
+        record.end,
+        record.amount,
+        record.note || 'Recorded absence',
+      )
+      setAbsences((current) => [
+        ...current,
+        {
+          ...record,
+          id: absenceId,
+          recordedAt: toIsoDate(APP_TODAY),
+        },
+      ])
+      setRequests((current) => [
+        ...current,
+        {
+          id: requestId,
+          employeeId: employee.id,
+          name: employee.name,
+          initials: employee.initials,
+          color: employee.color,
+          ...fields,
+          status: 'Approved',
+          leaveType,
+          absenceId,
+        },
+      ])
+    } else {
+      addAbsence(record)
+    }
+
     setIsRecordAbsenceOpen(false)
     notify('Absence recorded')
   }

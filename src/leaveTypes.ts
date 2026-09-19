@@ -36,3 +36,16 @@ export function absenceTypeForLeaveRequest(type: LeaveRequestType | undefined): 
       return 'annual_leave'
   }
 }
+
+export function leaveRequestTypeFromAbsenceType(type: AbsenceType): LeaveRequestType | null {
+  switch (type) {
+    case 'annual_leave':
+      return 'annual'
+    case 'unpaid_leave':
+      return 'unpaid'
+    case 'other_leave':
+      return 'other'
+    default:
+      return null
+  }
+}

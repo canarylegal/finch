@@ -453,21 +453,59 @@ export function companyInitials(name: string) {
 }
 
 /**
- * Drop annual absences that are not linked to an Approved request via absenceId.
- * Covers legacy Pending mirrors, Declined leftovers, and amendment date ghosts.
+ * Drop annual absences that match known request-derived orphan patterns:
+ * Pending mirrors (no absenceId) and Declined/Cancelled leftovers.
+ * Manual annual leave is recorded with an Approved request + absenceId so it survives reload.
  */
 export function scrubOrphanLeaveAbsences(
   absences: AbsenceRecord[],
-  requests: { status: string; absenceId?: number }[],
+  requests: {
+    employeeId?: number
+    status: string
+    start?: string
+    end?: string
+    absenceId?: number
+  }[],
 ) {
   const linkedApprovedIds = new Set(
     requests
       .filter((request) => request.status === 'Approved' && request.absenceId != null)
       .map((request) => request.absenceId as number),
   )
-  return absences.filter(
-    (absence) => absence.type !== 'annual_leave' || linkedApprovedIds.has(absence.id),
+  const pendingUnlinkedKeys = new Set(
+    requests
+      .filter(
+        (request) =>
+          request.status === 'Pending' &&
+          request.employeeId != null &&
+          request.start &&
+          request.end &&
+          request.absenceId == null,
+      )
+      .map((request) => `${request.employeeId}|${request.start}|${request.end}`),
   )
+  const declinedOrCancelledKeys = new Set(
+    requests
+      .filter(
+        (request) =>
+          (request.status === 'Declined' || request.status === 'Cancelled') &&
+          request.employeeId != null &&
+          request.start &&
+          request.end,
+      )
+      .map((request) => `${request.employeeId}|${request.start}|${request.end}`),
+  )
+
+  return absences.filter((absence) => {
+    if (absence.type !== 'annual_leave') return true
+    if (linkedApprovedIds.has(absence.id)) return true
+
+    const key = `${absence.employeeId}|${absence.start}|${absence.end}`
+    if (pendingUnlinkedKeys.has(key)) return false
+    if (declinedOrCancelledKeys.has(key)) return false
+
+    return true
+  })
 }
 
 /** @deprecated Use scrubOrphanLeaveAbsences */
