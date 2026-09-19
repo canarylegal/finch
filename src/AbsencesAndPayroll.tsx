@@ -6,6 +6,7 @@ import {
   Mail,
   Plus,
   Search,
+  Trash2,
   X,
 } from 'lucide-react'
 import {
@@ -24,6 +25,8 @@ import {
   payrollReportToCsv,
   type PayrollReportRow,
 } from './payroll'
+import type { LeaveRequest } from './domain'
+import { leaveRequestTypeFromAbsenceType } from './leaveTypes'
 
 type Employee = {
   id: number
@@ -189,20 +192,30 @@ export function RecordAbsenceModal({
 export function AbsencesPage({
   employees,
   absences,
+  requests,
   onRecordAbsence,
+  onDeleteAbsence,
+  onOpenRequest,
 }: {
   employees: Employee[]
   absences: AbsenceRecord[]
+  requests: LeaveRequest[]
   onRecordAbsence: () => void
+  onDeleteAbsence: (absenceId: number) => void
+  onOpenRequest: (requestId: number) => void
 }) {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<AbsenceType | 'all'>('all')
 
   const rows = absences
-    .map((record) => ({
-      ...record,
-      employeeName: employees.find((employee) => employee.id === record.employeeId)?.name ?? 'Unknown',
-    }))
+    .map((record) => {
+      const linkedRequest = requests.find((request) => request.absenceId === record.id)
+      return {
+        ...record,
+        employeeName: employees.find((employee) => employee.id === record.employeeId)?.name ?? 'Unknown',
+        linkedRequest,
+      }
+    })
     .filter((record) => {
       const matchesSearch =
         record.employeeName.toLowerCase().includes(search.toLowerCase()) ||
@@ -258,6 +271,7 @@ export function AbsencesPage({
           <span>Dates</span>
           <span>Days</span>
           <span>Recorded by</span>
+          <span>Actions</span>
         </div>
 
         {rows.length === 0 ? (
@@ -266,20 +280,58 @@ export function AbsencesPage({
             <span>Record an absence to build your payroll report data.</span>
           </div>
         ) : (
-          rows.map((record) => (
-            <div className="absence-row" key={record.id}>
-              <strong>{record.employeeName}</strong>
-              <span className={`absence-pill absence-pill-${record.type}`}>
-                {ABSENCE_TYPE_LABELS[record.type]}
-              </span>
-              <span>
-                {formatDisplayDate(record.start)}
-                {record.end !== record.start ? ` – ${formatDisplayDate(record.end)}` : ''}
-              </span>
-              <span>{record.amount}</span>
-              <span>{record.recordedBy}</span>
-            </div>
-          ))
+          rows.map((record) => {
+            const isLeaveType = leaveRequestTypeFromAbsenceType(record.type) != null
+            return (
+              <div className="absence-row" key={record.id}>
+                <strong>{record.employeeName}</strong>
+                <span className={`absence-pill absence-pill-${record.type}`}>
+                  {ABSENCE_TYPE_LABELS[record.type]}
+                </span>
+                <span>
+                  {formatDisplayDate(record.start)}
+                  {record.end !== record.start ? ` – ${formatDisplayDate(record.end)}` : ''}
+                </span>
+                <span>{record.amount}</span>
+                <span>{record.recordedBy}</span>
+                <div className="absence-row-actions">
+                  {record.linkedRequest && (
+                    <button
+                      type="button"
+                      className="button button-secondary button-compact"
+                      onClick={() => onOpenRequest(record.linkedRequest!.id)}
+                    >
+                      Request
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="danger-icon-button"
+                    aria-label={
+                      isLeaveType && record.linkedRequest
+                        ? 'Cancel linked leave'
+                        : 'Remove absence'
+                    }
+                    title={
+                      isLeaveType && record.linkedRequest
+                        ? 'Cancel linked leave request'
+                        : 'Remove from ledger'
+                    }
+                    onClick={() => {
+                      const message =
+                        isLeaveType && record.linkedRequest
+                          ? 'Cancel this leave and remove it from the ledger?'
+                          : 'Remove this absence from the ledger?'
+                      if (!window.confirm(message)) return
+                      onDeleteAbsence(record.id)
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </div>
+            )
+          })
         )}
       </div>
     </div>

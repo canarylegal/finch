@@ -235,3 +235,12 @@ export function saveFinchAppData(data: FinchAppData) {
     return false
   }
 }
+
+export function clearFinchAppData() {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+    return true
+  } catch {
+    return false
+  }
+}

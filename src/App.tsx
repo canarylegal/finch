@@ -137,7 +137,8 @@ import {
   nextLeaveAdjustmentId,
   type LeaveAdjustment,
 } from './leaveAdjustments'
-import { saveFinchAppData } from './storage'
+import { saveFinchAppData, clearFinchAppData } from './storage'
+import { findLeaveConflicts, overlapWarningMessage } from './leaveOverlap'
 import './App.css'
 
 function App() {
@@ -678,6 +679,30 @@ function App() {
     notify('Leave cancelled')
   }
 
+  const deleteAbsence = (absenceId: number) => {
+    const linkedRequest = requests.find((item) => item.absenceId === absenceId)
+    if (linkedRequest && linkedRequest.status === 'Approved') {
+      cancelApprovedLeave(linkedRequest.id)
+      return
+    }
+
+    setAbsences((current) => current.filter((item) => item.id !== absenceId))
+    if (linkedRequest) {
+      setRequests((current) =>
+        current.map((item) =>
+          item.id === linkedRequest.id ? { ...item, absenceId: undefined } : item,
+        ),
+      )
+    }
+    notify('Absence removed')
+  }
+
+  const resetAppData = () => {
+    clearFinchAppData()
+    clearSession()
+    window.location.reload()
+  }
+
   const saveCompanySettings = (next: CompanySettings) => {
     const previousConfirmation = confirmationForLeaveYear(
       company.mandatoryLeaveConfirmations,
@@ -759,6 +784,18 @@ function App() {
         )
         if (!proceed) return
       }
+    }
+
+    const conflicts = findLeaveConflicts({
+      employeeId: employee.id,
+      start: payload.start,
+      end: payload.end,
+      absences,
+      requests,
+    })
+    if (conflicts.length > 0) {
+      const proceed = window.confirm(overlapWarningMessage(conflicts))
+      if (!proceed) return
     }
 
     const startLabel = formatDisplayDate(payload.start)
@@ -1031,6 +1068,18 @@ function App() {
       }
     }
 
+    const conflicts = findLeaveConflicts({
+      employeeId: employee.id,
+      start: payload.start,
+      end: payload.end,
+      absences,
+      requests,
+    })
+    if (conflicts.length > 0) {
+      const proceed = window.confirm(overlapWarningMessage(conflicts))
+      if (!proceed) return
+    }
+
     const absenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
     const requestId = Math.max(0, ...requests.map((item) => item.id)) + 1
     const fields = buildLeaveRequestFields(
@@ -1076,6 +1125,18 @@ function App() {
   const recordAbsence = (record: Omit<AbsenceRecord, 'id' | 'recordedAt'>) => {
     const leaveType = leaveRequestTypeFromAbsenceType(record.type)
     const employee = employees.find((item) => item.id === record.employeeId)
+
+    const conflicts = findLeaveConflicts({
+      employeeId: record.employeeId,
+      start: record.start,
+      end: record.end,
+      absences,
+      requests,
+    })
+    if (conflicts.length > 0) {
+      const proceed = window.confirm(overlapWarningMessage(conflicts))
+      if (!proceed) return
+    }
 
     if (leaveType && employee) {
       // Request-backed leave types need an Approved request + absenceId so reload
@@ -1351,7 +1412,12 @@ function App() {
           <AbsencesPage
             employees={employees}
             absences={absences}
+            requests={requests}
             onRecordAbsence={() => setIsRecordAbsenceOpen(true)}
+            onDeleteAbsence={deleteAbsence}
+            onOpenRequest={(requestId) => {
+              setActiveLeaveRequestId(requestId)
+            }}
           />
         )}
         {activeNav === 'Team calendar' && isAdmin && (
@@ -1454,6 +1520,7 @@ function App() {
             leaveYear={leaveYear}
             portalMessages={portalMessages}
             adjustments={leaveAdjustments}
+            closures={leaveYearClosures}
             onRequestLeave={openRequestLeave}
             onOpenRequest={setActiveLeaveRequestId}
           />
@@ -1537,6 +1604,7 @@ function App() {
               notify(`Account created for ${account.displayName}`)
               return null
             }}
+            onResetAppData={resetAppData}
           />
         )}
       </main>

@@ -42,6 +42,7 @@ export function SettingsPage({
   onOpenLeaveYears,
   onUpdateAccount,
   onAddAccount,
+  onResetAppData,
 }: {
   company: CompanySettings
   bankHolidays: BankHoliday[]
@@ -63,6 +64,7 @@ export function SettingsPage({
     password: string
     jobTitle?: string
   }) => Promise<string | null>
+  onResetAppData: () => void
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   const [draft, setDraft] = useState(company)
@@ -945,6 +947,29 @@ export function SettingsPage({
                     </div>
                   </div>
                 )}
+              </div>
+              <div className="settings-divider" />
+              <div className="settings-section settings-section-stack">
+                <div>
+                  <h2>Reset local data</h2>
+                  <p>
+                    Clear all stored company data on this browser and restore the starter
+                    dataset. You will be signed out.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="button button-secondary danger-text-button"
+                  onClick={() => {
+                    const proceed = window.confirm(
+                      'Reset all Finch data on this browser to the starter dataset? This cannot be undone.',
+                    )
+                    if (!proceed) return
+                    onResetAppData()
+                  }}
+                >
+                  Reset to starter data
+                </button>
               </div>
             </>
           )}

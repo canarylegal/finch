@@ -2826,7 +2826,7 @@ button.toggle {
 .absence-list-heading,
 .absence-row {
   display: grid;
-  grid-template-columns: 1.2fr 1.1fr 1.3fr 0.5fr 0.9fr;
+  grid-template-columns: 1.2fr 1.1fr 1.3fr 0.5fr 0.9fr 1fr;
   align-items: center;
   gap: 12px;
 }
@@ -2849,6 +2849,57 @@ button.toggle {
 .absence-row strong {
   color: #40565a;
   font-size: 11px;
+}
+
+.absence-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.button-compact {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.danger-text-button {
+  color: #b54a3c;
+  border-color: #e8c4bd;
+}
+
+.danger-text-button:hover {
+  background: #fff0ec;
+}
+
+.leave-year-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 4px;
+  background: #f3f6f4;
+  border-radius: 10px;
+}
+
+.segment-button {
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #5f726e;
+  cursor: pointer;
+}
+
+.segment-button.is-active {
+  background: white;
+  color: #1f2a28;
+  box-shadow: 0 1px 2px rgba(20, 40, 30, 0.08);
+}
+
+.leave-year-carry-note {
+  margin: 0 0 14px;
 }
 
 .absence-pill {
