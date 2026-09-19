@@ -19,6 +19,8 @@ export type AbsenceRecord = {
   recordedBy: string
   recordedAt: string
   adjustmentLabel?: string
+  /** Distinguishes Absences → Record absence from request-backed leave (F10 / F1 scrub). */
+  origin?: 'manual' | 'request'
 }
 
 export type PayPeriodType = 'monthly' | 'weekly'

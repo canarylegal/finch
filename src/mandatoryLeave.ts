@@ -169,6 +169,7 @@ export function applyMandatoryLeaveBookings({
           note,
           recordedBy,
           recordedAt,
+          origin: 'request',
         },
       ]
 

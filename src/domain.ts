@@ -454,8 +454,8 @@ export function companyInitials(name: string) {
 
 /**
  * Drop annual absences that match known request-derived orphan patterns:
- * Pending mirrors (no absenceId) and Declined/Cancelled leftovers.
- * Manual annual leave is recorded with an Approved request + absenceId so it survives reload.
+ * Pending mirrors, Declined/Cancelled leftovers, and amendment date ghosts.
+ * Manual absences (origin: 'manual') and linked Approved absences are preserved.
  */
 export function scrubOrphanLeaveAbsences(
   absences: AbsenceRecord[],
@@ -499,10 +499,23 @@ export function scrubOrphanLeaveAbsences(
   return absences.filter((absence) => {
     if (absence.type !== 'annual_leave') return true
     if (linkedApprovedIds.has(absence.id)) return true
+    if (absence.origin === 'manual') return true
 
     const key = `${absence.employeeId}|${absence.start}|${absence.end}`
     if (pendingUnlinkedKeys.has(key)) return false
     if (declinedOrCancelledKeys.has(key)) return false
+
+    // Amendment ghost on direct upgrade: unlinked request-derived annual while a
+    // different linked Approved booking exists for the same employee.
+    const hasReplacementBooking = requests.some(
+      (request) =>
+        request.status === 'Approved' &&
+        request.employeeId === absence.employeeId &&
+        request.absenceId != null &&
+        request.absenceId !== absence.id &&
+        (request.start !== absence.start || request.end !== absence.end),
+    )
+    if (hasReplacementBooking) return false
 
     return true
   })

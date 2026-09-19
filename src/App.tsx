@@ -477,18 +477,37 @@ function App() {
     let nextAbsenceId = request.absenceId
 
     if (request.absenceId != null) {
+      const previousStart = request.start
+      const previousEnd = request.end
       setAbsences((current) =>
-        current.map((item) =>
-          item.id === request.absenceId
-            ? {
-                ...item,
-                start: amendment.start,
-                end: amendment.end,
-                amount,
-                note: amendment.note || item.note,
-              }
-            : item,
-        ),
+        current
+          .map((item) =>
+            item.id === request.absenceId
+              ? {
+                  ...item,
+                  start: amendment.start,
+                  end: amendment.end,
+                  amount,
+                  note: amendment.note || item.note,
+                  origin: item.origin ?? 'request',
+                }
+              : item,
+          )
+          .filter((item) => {
+            if (item.id === request.absenceId) return true
+            if (item.origin === 'manual') return true
+            if (
+              item.type === absenceTypeForLeaveRequest(request.leaveType) &&
+              item.employeeId === employee.id &&
+              previousStart &&
+              previousEnd &&
+              item.start === previousStart &&
+              item.end === previousEnd
+            ) {
+              return false
+            }
+            return true
+          }),
       )
     } else {
       nextAbsenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
@@ -504,6 +523,7 @@ function App() {
           note: amendment.note || 'Approved leave amendment',
           recordedBy: actorDisplayName,
           recordedAt,
+          origin: 'request',
         },
       ])
     }
@@ -584,8 +604,15 @@ function App() {
             recordedBy: actorDisplayName,
             id: newAbsenceId,
             recordedAt: toIsoDate(APP_TODAY),
+            origin: 'request',
           },
         ])
+      } else {
+        setAbsences((current) =>
+          current.map((item) =>
+            item.id === existingOrphan.id ? { ...item, origin: item.origin ?? 'request' } : item,
+          ),
+        )
       }
       setRequests((current) =>
         current.map((item) =>
@@ -1025,6 +1052,7 @@ function App() {
         note: payload.leaveType || 'Admin-added leave',
         recordedBy: actorDisplayName,
         recordedAt: toIsoDate(APP_TODAY),
+        origin: 'request',
       },
     ])
     setRequests((current) => [
@@ -1066,6 +1094,7 @@ function App() {
           ...record,
           id: absenceId,
           recordedAt: toIsoDate(APP_TODAY),
+          origin: 'manual',
         },
       ])
       setRequests((current) => [
