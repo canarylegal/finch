@@ -14,7 +14,7 @@ import { estimateDataUrlSize, formatFileSize } from '../employeeDocuments'
 import { EXPENSE_CATEGORY_LABELS, formatGbp } from '../expenses'
 import { hasPendingAmendment } from '../leaveRequestHelpers'
 import { type LeaveYearPeriod } from '../leaveYear'
-import { formatBalanceAmount, parseDurationDays, remainingAnnualLeave } from '../leaveBalance'
+import { formatBalanceAmount, leaveDaysInLeaveYear, remainingAnnualLeave } from '../leaveBalance'
 import type { LeaveAdjustment } from '../leaveAdjustments'
 import { isAnnualLeaveRequest, leaveRequestTypeLabel } from '../leaveTypes'
 import { messagesForRequest } from '../portalMessages'
@@ -169,7 +169,14 @@ export function AdminRequests({
                       absences,
                       requests,
                       leaveYear,
-                      parseDurationDays(request.duration),
+                      request.start && request.end
+                        ? leaveDaysInLeaveYear(
+                            request.start,
+                            request.end,
+                            leaveYear,
+                            employee.workingDays,
+                          )
+                        : 0,
                       request.id,
                       adjustments,
                     )

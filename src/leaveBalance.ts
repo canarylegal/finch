@@ -21,6 +21,7 @@ export type LeaveRequestLike = {
   leaveType?: LeaveRequestType
   source?: 'mandatory'
   start?: string
+  end?: string
 }
 
 export type CompanyEntitlementSettings = {
@@ -173,7 +174,9 @@ export function pendingLeaveDays(
   leaveYear?: LeaveYearPeriod,
   excludeRequestId?: number,
   employeeName?: string,
+  workingDays?: number[],
 ) {
+  const pattern = normalizeWorkingDays(workingDays)
   return requests
     .filter(
       (request) =>
@@ -182,9 +185,38 @@ export function pendingLeaveDays(
         request.status === 'Pending' &&
         isAnnualLeaveRequest(request) &&
         request.id !== excludeRequestId &&
-        (!leaveYear || requestInLeaveYear(request.start, leaveYear)),
+        (!leaveYear ||
+          (request.start != null &&
+            request.end != null &&
+            request.start <= leaveYear.end &&
+            request.end >= leaveYear.start) ||
+          requestInLeaveYear(request.start, leaveYear)),
     )
-    .reduce((total, request) => total + parseDurationDays(request.duration), 0)
+    .reduce((total, request) => {
+      if (leaveYear && request.start && request.end) {
+        return (
+          total +
+          overlapWorkingDays(request.start, request.end, leaveYear.start, leaveYear.end, pattern)
+        )
+      }
+      return total + parseDurationDays(request.duration)
+    }, 0)
+}
+
+/** Working days of a leave range that fall inside the leave year. */
+export function leaveDaysInLeaveYear(
+  start: string,
+  end: string,
+  leaveYear: LeaveYearPeriod,
+  workingDays?: number[],
+) {
+  return overlapWorkingDays(
+    start,
+    end,
+    leaveYear.start,
+    leaveYear.end,
+    normalizeWorkingDays(workingDays),
+  )
 }
 
 export function remainingAnnualLeave(
@@ -207,6 +239,7 @@ export function remainingAnnualLeave(
     leaveYear,
     excludeRequestId,
     employee.name,
+    employee.workingDays,
   )
   return allowance + adjustmentNet - taken - pending - additionalDays
 }

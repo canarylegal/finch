@@ -6,10 +6,10 @@ import type { PolicyDocument } from '../domain'
 import {
   ACCEPTED_POLICY_ACCEPT,
   formatPolicyUpdatedAt,
-  openPolicyDocument,
   preparePolicyFile,
   sortedPolicies,
 } from '../policies'
+import { PolicyViewerModal } from '../modals/PolicyViewerModal'
 
 type PoliciesProps = {
   policies: PolicyDocument[]
@@ -50,6 +50,7 @@ export function Policies({
 }: PoliciesProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [editor, setEditor] = useState<EditorState>(null)
+  const [viewing, setViewing] = useState<PolicyDocument | null>(null)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [fileMeta, setFileMeta] = useState<{
@@ -189,8 +190,8 @@ export function Policies({
                 type="button"
                 className="policy-card-main"
                 onClick={() => {
-                  openPolicyDocument(policy)
-                  onNotify(`${policy.title} opened`)
+                  setViewing(policy)
+                  onNotify(`Viewing ${policy.title}`)
                 }}
               >
                 <div className={`document-large-icon ${policy.accent}`}>
@@ -348,6 +349,7 @@ export function Policies({
           </div>
         </div>
       )}
+      {viewing && <PolicyViewerModal policy={viewing} onClose={() => setViewing(null)} />}
     </div>
   )
 }

@@ -12,10 +12,11 @@ import {
   Users,
 } from 'lucide-react'
 import { DEFAULT_NOTIFICATION_EVENTS, normalizeNotificationEvents, type NotificationEvents } from './notifications'
-import { ENGLAND_WALES_BANK_HOLIDAYS_2026, normalizeWorkingDays, type BankHolidayRegion } from './payroll'
+import { ENGLAND_WALES_BANK_HOLIDAYS_2026, normalizeWorkingDays, type AbsenceRecord, type BankHolidayRegion } from './payroll'
 import { migrateDocumentsToFolders } from './employeeDocuments'
 import { withEmploymentDates } from './hrTasks'
 import type { MandatoryLeaveConfirmation } from './mandatoryLeave'
+import { ensureAccounts, type Account } from './auth'
 import { loadFinchAppData } from './storage'
 import type { EntitlementMode } from './leaveBalance'
 import type { LeaveRequestType } from './leaveTypes'
@@ -252,12 +253,12 @@ export const initialRequests: LeaveRequest[] = [
     name: 'Jamie Wilson',
     initials: 'JW',
     color: 'peach',
-    dates: '8–12 Sep 2026',
-    duration: '5 days',
+    dates: '8–11 Sep 2026',
+    duration: '4 days',
     note: 'Family holiday',
     status: 'Pending',
     start: '2026-09-08',
-    end: '2026-09-12',
+    end: '2026-09-11',
   },
   {
     id: 2,
@@ -291,12 +292,12 @@ export const initialRequests: LeaveRequest[] = [
     name: 'Sophie Carter',
     initials: 'SC',
     color: 'sage',
-    dates: '18–19 Sep 2026',
+    dates: '17–18 Sep 2026',
     duration: '2 days',
     note: 'Long weekend',
     status: 'Pending',
-    start: '2026-09-18',
-    end: '2026-09-19',
+    start: '2026-09-17',
+    end: '2026-09-18',
   },
 ]
 
@@ -342,8 +343,8 @@ export const initialEmployeeDocuments: EmployeeDocument[] = [
     folderId: 1,
     title: 'Employment contract',
     category: 'contract',
-    fileName: 'sophie-carter-contract.pdf',
-    fileType: 'application/pdf',
+    fileName: 'sophie-carter-contract.txt',
+    fileType: 'text/plain',
     fileDataUrl: demoFile('Employment contract — Sophie Carter'),
     uploadedAt: '2026-01-15T09:00:00.000Z',
     uploadedBy: 'Alex Morgan',
@@ -355,8 +356,8 @@ export const initialEmployeeDocuments: EmployeeDocument[] = [
     folderId: 1,
     title: 'Payslip — July 2026',
     category: 'payslip',
-    fileName: 'payslip-2026-07.pdf',
-    fileType: 'application/pdf',
+    fileName: 'payslip-2026-07.txt',
+    fileType: 'text/plain',
     fileDataUrl: demoFile('Payslip — July 2026'),
     uploadedAt: '2026-08-03T12:00:00.000Z',
     uploadedBy: 'Alex Morgan',
@@ -367,8 +368,8 @@ export const initialEmployeeDocuments: EmployeeDocument[] = [
     folderId: 1,
     title: 'P60 — 2025/26',
     category: 'tax',
-    fileName: 'p60-2025-26.pdf',
-    fileType: 'application/pdf',
+    fileName: 'p60-2025-26.txt',
+    fileType: 'text/plain',
     fileDataUrl: demoFile('P60 — 2025/26'),
     uploadedAt: '2026-05-20T11:30:00.000Z',
     uploadedBy: 'Alex Morgan',
@@ -379,8 +380,8 @@ export const initialEmployeeDocuments: EmployeeDocument[] = [
     folderId: 3,
     title: 'Employment contract',
     category: 'contract',
-    fileName: 'jamie-wilson-contract.pdf',
-    fileType: 'application/pdf',
+    fileName: 'jamie-wilson-contract.txt',
+    fileType: 'text/plain',
     fileDataUrl: demoFile('Employment contract — Jamie Wilson'),
     uploadedAt: '2026-02-10T09:00:00.000Z',
     uploadedBy: 'Alex Morgan',
@@ -451,6 +452,37 @@ export function companyInitials(name: string) {
     .join('')
 }
 
+/**
+ * Drop annual absences that mirror a Pending request for the same employee/dates
+ * but were never linked via absenceId (legacy seed inconsistency).
+ */
+export function scrubOrphanPendingAbsences(
+  absences: AbsenceRecord[],
+  requests: { employeeId?: number; status: string; start?: string; end?: string; absenceId?: number }[],
+) {
+  const linkedIds = new Set(
+    requests.map((request) => request.absenceId).filter((id): id is number => id != null),
+  )
+  const pendingKeys = new Set(
+    requests
+      .filter(
+        (request) =>
+          request.status === 'Pending' &&
+          request.employeeId != null &&
+          request.start &&
+          request.end &&
+          request.absenceId == null,
+      )
+      .map((request) => `${request.employeeId}|${request.start}|${request.end}`),
+  )
+  return absences.filter((absence) => {
+    if (linkedIds.has(absence.id)) return true
+    if (absence.type !== 'annual_leave') return true
+    const key = `${absence.employeeId}|${absence.start}|${absence.end}`
+    return !pendingKeys.has(key)
+  })
+}
+
 export function readPersistedState() {
   const stored = loadFinchAppData()
   if (!stored) return null
@@ -458,6 +490,10 @@ export function readPersistedState() {
     ...defaultCompanySettings,
     ...stored.company,
     defaultWorkingDays: normalizeWorkingDays(stored.company.defaultWorkingDays),
+    defaultEntitlementUnit:
+      stored.company.defaultEntitlementUnit === 'hours'
+        ? 'days'
+        : (stored.company.defaultEntitlementUnit ?? defaultCompanySettings.defaultEntitlementUnit),
     entitlementIncludesBankHolidays:
       stored.company.entitlementIncludesBankHolidays ?? defaultCompanySettings.entitlementIncludesBankHolidays,
     notificationEvents: normalizeNotificationEvents(stored.company.notificationEvents),
@@ -469,28 +505,38 @@ export function readPersistedState() {
     stored.documentFolders ?? [],
     stored.employeeDocuments ?? [],
   )
+  const requests = stored.requests.map((request) => ({
+    ...request,
+    employeeId:
+      request.employeeId ??
+      stored.employees.find((employee) => employee.name === request.name)?.id ??
+      0,
+  }))
   return {
     employees: stored.employees.map((employee) =>
       withEmploymentDates({
         ...employee,
         workingDays: normalizeWorkingDays(employee.workingDays),
         entitlementMode: employee.entitlementMode ?? 'custom',
+        entitlementUnit: employee.entitlementUnit === 'hours' ? 'days' : employee.entitlementUnit,
       }),
     ),
-    absences: stored.absences,
+    absences: scrubOrphanPendingAbsences(stored.absences, requests),
     company,
     bankHolidays: stored.bankHolidays ?? ENGLAND_WALES_BANK_HOLIDAYS_2026,
-    requests: stored.requests.map((request) => ({
-      ...request,
-      employeeId:
-        request.employeeId ??
-        stored.employees.find((employee) => employee.name === request.name)?.id ??
-        0,
-    })),
+    requests,
     portalMessages: stored.portalMessages ?? [],
     documentFolders: migrated.folders,
-    employeeDocuments: migrated.documents,
-    preferAdminView: stored.preferAdminView ?? false,
+    employeeDocuments: migrated.documents.map((document) =>
+      document.fileType === 'application/pdf' && document.fileDataUrl.startsWith('data:text/plain')
+        ? {
+            ...document,
+            fileType: 'text/plain',
+            fileName: document.fileName.replace(/\.pdf$/i, '.txt'),
+          }
+        : document,
+    ),
+    accounts: ensureAccounts(stored.accounts as Account[] | undefined),
     expenseClaims: stored.expenseClaims,
     taskDismissals: stored.taskDismissals ?? [],
     policies: stored.policies,

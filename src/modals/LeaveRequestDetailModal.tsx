@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CalendarDays, Check, ChevronRight, Clock3, Pencil, X } from 'lucide-react'
 import { PortalMessageThread } from '../components/PortalMessageThread'
 import {
+  APP_TODAY,
   companyEntitlementSettings,
   type CompanySettings,
   type Employee,
@@ -17,15 +18,22 @@ import {
   hasPendingAmendment,
   requestDisplayDates,
 } from '../leaveRequestHelpers'
-import { formatBalanceAmount, overAllowanceMessage, parseDurationDays, remainingAnnualLeave } from '../leaveBalance'
+import {
+  formatBalanceAmount,
+  leaveDaysInLeaveYear,
+  overAllowanceMessage,
+  remainingAnnualLeave,
+} from '../leaveBalance'
 import type { LeaveAdjustment } from '../leaveAdjustments'
 import { type LeaveYearPeriod } from '../leaveYear'
+import { isAnnualLeaveRequest } from '../leaveTypes'
 import { messagesForRequest } from '../portalMessages'
 import {
   countWorkingDaysInRange,
   type AbsenceRecord,
   type BankHoliday,
 } from '../payroll'
+import { toIsoDate } from '../calendarUtils'
 
 type LeaveRequestDetailModalProps = {
   request: LeaveRequest
@@ -67,9 +75,23 @@ export function LeaveRequestDetailModal({
   onCancelApproved,
 }: LeaveRequestDetailModalProps) {
   const [isEditing, setIsEditing] = useState(false)
-  const [startDate, setStartDate] = useState(request.start ?? '2026-09-18')
-  const [endDate, setEndDate] = useState(request.end ?? '2026-09-19')
+  const defaults = {
+    start: request.start ?? toIsoDate(APP_TODAY),
+    end:
+      request.end ??
+      toIsoDate(new Date(APP_TODAY.getFullYear(), APP_TODAY.getMonth(), APP_TODAY.getDate() + 1)),
+  }
+  const [startDate, setStartDate] = useState(defaults.start)
+  const [endDate, setEndDate] = useState(defaults.end)
   const [note, setNote] = useState(request.note)
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
 
   const entitlementSettings = companyEntitlementSettings(company)
   const threadMessages = messagesForRequest(portalMessages, request.id)
@@ -79,9 +101,20 @@ export function LeaveRequestDetailModal({
     [startDate, endDate, employee.workingDays],
   )
   const balanceAfterAmend = useMemo(() => {
-    if (dayCount <= 0) return null
+    if (!isAnnualLeaveRequest(request) || dayCount <= 0) return null
+    const newYearDays = leaveDaysInLeaveYear(
+      startDate,
+      endDate,
+      leaveYear,
+      employee.workingDays,
+    )
     const additionalDays =
-      request.status === 'Pending' ? dayCount : dayCount - parseDurationDays(request.duration)
+      request.status === 'Pending'
+        ? newYearDays
+        : newYearDays -
+          (request.start && request.end
+            ? leaveDaysInLeaveYear(request.start, request.end, leaveYear, employee.workingDays)
+            : 0)
     return remainingAnnualLeave(
       employee,
       entitlementSettings,
@@ -89,12 +122,14 @@ export function LeaveRequestDetailModal({
       absences,
       requests,
       leaveYear,
-      Math.max(0, additionalDays),
+      additionalDays,
       request.id,
       adjustments,
     )
   }, [
     dayCount,
+    startDate,
+    endDate,
     request,
     employee,
     entitlementSettings,
@@ -111,7 +146,11 @@ export function LeaveRequestDetailModal({
 
   const handleSaveAmendment = () => {
     if (dayCount <= 0) return
-    if (balanceAfterAmend !== null && balanceAfterAmend < 0) {
+    if (
+      isAnnualLeaveRequest(request) &&
+      balanceAfterAmend !== null &&
+      balanceAfterAmend < 0
+    ) {
       const proceed = window.confirm(
         overAllowanceMessage(
           viewer === 'employee' ? 'You' : employee.name,

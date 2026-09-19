@@ -3,7 +3,12 @@ import { Plus, Trash2 } from 'lucide-react'
 import { EntitlementBasisNote } from '../components/EntitlementBasisNote'
 import { PageHeader } from '../components/PageHeader'
 import { WorkingDaysPicker } from '../components/WorkingDaysPicker'
-import { companyInitials, type CompanySettings, type SettingsTab } from '../domain'
+import {
+  activeAdminCount,
+  type Account,
+  type AccountRole,
+} from '../auth'
+import { companyInitials, type CompanySettings, type Employee, type SettingsTab } from '../domain'
 import {
   confirmationForLeaveYear,
   leaveYearKey,
@@ -28,23 +33,47 @@ export function SettingsPage({
   bankHolidays,
   leaveYear,
   initialTab = 'company',
+  accounts,
+  employees,
+  currentAccountId,
   onSave,
   onBankHolidaysChange,
   onNotify,
   onOpenLeaveYears,
+  onUpdateAccount,
+  onAddAccount,
 }: {
   company: CompanySettings
   bankHolidays: BankHoliday[]
   leaveYear: LeaveYearPeriod
   initialTab?: SettingsTab
+  accounts: Account[]
+  employees: Employee[]
+  currentAccountId: number
   onSave: (settings: CompanySettings) => void
   onBankHolidaysChange: (holidays: BankHoliday[]) => void
   onNotify: (message: string) => void
   onOpenLeaveYears?: () => void
+  onUpdateAccount: (account: Account) => void
+  onAddAccount: (payload: {
+    email: string
+    displayName: string
+    role: AccountRole
+    employeeId: number | null
+    password: string
+    jobTitle?: string
+  }) => Promise<string | null>
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   const [draft, setDraft] = useState(company)
   const logoInputRef = useRef<HTMLInputElement>(null)
+  const [showAddAccount, setShowAddAccount] = useState(false)
+  const [newAccountEmail, setNewAccountEmail] = useState('')
+  const [newAccountName, setNewAccountName] = useState('')
+  const [newAccountRole, setNewAccountRole] = useState<AccountRole>('employee')
+  const [newAccountEmployeeId, setNewAccountEmployeeId] = useState<number | ''>('')
+  const [newAccountPassword, setNewAccountPassword] = useState('demo')
+  const [addAccountBusy, setAddAccountBusy] = useState(false)
 
   useEffect(() => {
     setDraft(company)
@@ -116,6 +145,8 @@ export function SettingsPage({
 
     onSave({
       ...draft,
+      defaultEntitlementUnit:
+        draft.defaultEntitlementUnit === 'hours' ? 'days' : draft.defaultEntitlementUnit,
       mandatoryLeaveConfirmations,
     })
   }
@@ -496,9 +527,9 @@ export function SettingsPage({
                 <div>
                   <h2>Default roll-over</h2>
                   <p>
-                    When on, leave year close proposes carrying unused leave into the next year. When
-                    off, only deficits are proposed by default (you can still edit). Admins can also
-                    set roll-over on each employee.
+                    {draft.defaultRollOver
+                      ? 'Leave year close will propose carrying unused leave into the next year. Admins can still edit each opening balance, and individual employees can override roll-over.'
+                      : 'Leave year close will propose zero opening for unused leave by default (deficits are still proposed). Admins can still edit each opening balance, and individual employees can enable roll-over.'}
                   </p>
                 </div>
                 <button
@@ -723,22 +754,197 @@ export function SettingsPage({
                     </label>
                   ))}
                 </div>
+                <p className="field-helper">2FA is not enforced in this demo.</p>
               </div>
               <div className="settings-divider" />
-              <div className="settings-section">
+              <div className="settings-section settings-section-stack">
                 <div>
-                  <h2>Admin accounts</h2>
-                  <p>Manage who can approve leave, edit settings, and upload documents.</p>
+                  <h2>Accounts</h2>
+                  <p>Manage who can sign in, approve leave, and edit settings.</p>
                 </div>
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  disabled
-                  title="Admin accounts will be available with authentication"
-                >
-                  Manage admins
-                </button>
-                <p className="field-helper">Coming soon with sign-in and roles.</p>
+                <div className="account-admin-list">
+                  {accounts.map((account) => {
+                    const linked = account.employeeId
+                      ? employees.find((item) => item.id === account.employeeId)
+                      : undefined
+                    const isSelf = account.id === currentAccountId
+                    const isLastAdmin =
+                      account.role === 'admin' &&
+                      account.status === 'Active' &&
+                      activeAdminCount(accounts) <= 1
+                    return (
+                      <div className="account-admin-row" key={account.id}>
+                        <div>
+                          <strong>
+                            {account.displayName}
+                            {isSelf ? ' (you)' : ''}
+                          </strong>
+                          <span>
+                            {account.email} · {account.role}
+                            {account.status === 'Inactive' ? ' · inactive' : ''}
+                            {linked ? ` · ${linked.name}` : account.role === 'admin' ? ' · no employee link' : ''}
+                          </span>
+                        </div>
+                        <div className="account-admin-actions">
+                          {account.role === 'admin' ? (
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              disabled={isLastAdmin}
+                              title={isLastAdmin ? 'Keep at least one active admin' : undefined}
+                              onClick={() =>
+                                onUpdateAccount({ ...account, role: 'employee' })
+                              }
+                            >
+                              Make employee
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              onClick={() => onUpdateAccount({ ...account, role: 'admin' })}
+                            >
+                              Make admin
+                            </button>
+                          )}
+                          {account.status === 'Active' ? (
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              disabled={isSelf || isLastAdmin}
+                              title={
+                                isSelf
+                                  ? 'You cannot deactivate your own account'
+                                  : isLastAdmin
+                                    ? 'Keep at least one active admin'
+                                    : undefined
+                              }
+                              onClick={() =>
+                                onUpdateAccount({ ...account, status: 'Inactive' })
+                              }
+                            >
+                              Deactivate
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="button button-secondary"
+                              onClick={() =>
+                                onUpdateAccount({ ...account, status: 'Active' })
+                              }
+                            >
+                              Activate
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                {!showAddAccount ? (
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() => setShowAddAccount(true)}
+                  >
+                    <Plus size={15} />
+                    Add account
+                  </button>
+                ) : (
+                  <div className="account-add-form">
+                    <label>
+                      Email
+                      <input
+                        type="email"
+                        value={newAccountEmail}
+                        onChange={(event) => setNewAccountEmail(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Display name
+                      <input
+                        value={newAccountName}
+                        onChange={(event) => setNewAccountName(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Role
+                      <select
+                        value={newAccountRole}
+                        onChange={(event) =>
+                          setNewAccountRole(event.target.value as AccountRole)
+                        }
+                      >
+                        <option value="employee">Employee</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    </label>
+                    <label>
+                      Linked employee
+                      <select
+                        value={newAccountEmployeeId === '' ? '' : String(newAccountEmployeeId)}
+                        onChange={(event) =>
+                          setNewAccountEmployeeId(
+                            event.target.value ? Number(event.target.value) : '',
+                          )
+                        }
+                      >
+                        <option value="">None</option>
+                        {employees.map((employee) => (
+                          <option key={employee.id} value={employee.id}>
+                            {employee.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Password
+                      <input
+                        type="text"
+                        value={newAccountPassword}
+                        onChange={(event) => setNewAccountPassword(event.target.value)}
+                      />
+                    </label>
+                    <div className="account-admin-actions">
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        onClick={() => setShowAddAccount(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        disabled={addAccountBusy}
+                        onClick={async () => {
+                          setAddAccountBusy(true)
+                          const error = await onAddAccount({
+                            email: newAccountEmail,
+                            displayName: newAccountName,
+                            role: newAccountRole,
+                            employeeId:
+                              newAccountEmployeeId === '' ? null : newAccountEmployeeId,
+                            password: newAccountPassword,
+                          })
+                          setAddAccountBusy(false)
+                          if (error) {
+                            onNotify(error)
+                            return
+                          }
+                          setShowAddAccount(false)
+                          setNewAccountEmail('')
+                          setNewAccountName('')
+                          setNewAccountRole('employee')
+                          setNewAccountEmployeeId('')
+                          setNewAccountPassword('demo')
+                        }}
+                      >
+                        Create account
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </>
           )}

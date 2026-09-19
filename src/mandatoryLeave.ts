@@ -1,4 +1,4 @@
-import type { CompanySettings, Employee, LeaveRequest } from './domain'
+import { APP_TODAY, type CompanySettings, type Employee, type LeaveRequest } from './domain'
 import { buildLeaveRequestFields } from './leaveRequestHelpers'
 import type { LeaveYearPeriod } from './leaveYear'
 import { countWorkingDaysInRange, parseIsoDate, toIsoDate, type AbsenceRecord } from './payroll'
@@ -111,7 +111,7 @@ export function applyMandatoryLeaveBookings({
   recordedBy,
 }: BookingBuildArgs): { requests: LeaveRequest[]; absences: AbsenceRecord[] } {
   const yearKey = confirmation.leaveYearKey
-  const recordedAt = toIsoDate(new Date())
+  const recordedAt = toIsoDate(APP_TODAY)
 
   let nextAbsenceId = Math.max(0, ...existingAbsences.map((item) => item.id)) + 1
   let nextRequestId = Math.max(0, ...existingRequests.map((item) => item.id)) + 1

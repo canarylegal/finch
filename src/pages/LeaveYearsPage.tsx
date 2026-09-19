@@ -24,7 +24,6 @@ import {
   nextLeaveYearPeriod,
   type LeaveYearPeriod,
 } from '../leaveYear'
-import { ADMIN_DISPLAY_NAME } from '../portalMessages'
 import { formatDisplayDate, type AbsenceRecord, type BankHoliday } from '../payroll'
 
 type LeaveYearsTab = 'close' | 'history'
@@ -38,6 +37,7 @@ type LeaveYearsPageProps = {
   adjustments: LeaveAdjustment[]
   closures: LeaveYearClosure[]
   leaveYear: LeaveYearPeriod
+  closedByName: string
   today: Date
   onConfirmClose: (result: {
     closures: LeaveYearClosure[]
@@ -56,6 +56,7 @@ export function LeaveYearsPage({
   closures,
   leaveYear,
   today,
+  closedByName,
   onConfirmClose,
   onNotify,
 }: LeaveYearsPageProps) {
@@ -126,7 +127,7 @@ export function LeaveYearsPage({
       company,
       existingClosures: closures,
       existingAdjustments: adjustments,
-      closedBy: ADMIN_DISPLAY_NAME,
+      closedBy: closedByName,
       closedAt: today,
     })
     onConfirmClose(result)

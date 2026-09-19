@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react'
 import { CalendarDays, ChevronRight, X } from 'lucide-react'
+import { toIsoDate } from '../calendarUtils'
 import {
+  APP_TODAY,
   companyEntitlementSettings,
   type CompanySettings,
   type Employee,
-  type LeaveRequest,
 } from '../domain'
-import { formatBalanceAmount, remainingAnnualLeave } from '../leaveBalance'
+import { formatBalanceAmount, leaveDaysInLeaveYear, remainingAnnualLeave } from '../leaveBalance'
 import type { LeaveAdjustment } from '../leaveAdjustments'
 import { type LeaveYearPeriod } from '../leaveYear'
+import { leaveRequestTypeFromLabel } from '../leaveTypes'
 import {
   countWeekdaysInRange,
   countWorkingDaysInRange,
@@ -16,6 +18,14 @@ import {
   type AbsenceRecord,
   type BankHoliday,
 } from '../payroll'
+
+function defaultLeaveDates(today = APP_TODAY) {
+  const start = toIsoDate(today)
+  const end = toIsoDate(
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1),
+  )
+  return { start, end }
+}
 
 export function AdminAddLeaveModal({
   employees,
@@ -28,13 +38,14 @@ export function AdminAddLeaveModal({
     employeeId: number
     start: string
     end: string
-    label: string
+    leaveType: string
   }) => void
 }) {
+  const defaults = defaultLeaveDates()
   const [employeeId, setEmployeeId] = useState(employees[0]?.id ?? 0)
-  const [startDate, setStartDate] = useState('2026-09-18')
-  const [endDate, setEndDate] = useState('2026-09-19')
-  const [label, setLabel] = useState('Annual leave')
+  const [startDate, setStartDate] = useState(defaults.start)
+  const [endDate, setEndDate] = useState(defaults.end)
+  const [leaveType, setLeaveType] = useState('Annual leave')
   const selectedEmployee = employees.find((item) => item.id === employeeId)
   const dayCount = useMemo(
     () =>
@@ -78,7 +89,7 @@ export function AdminAddLeaveModal({
           </label>
           <label>
             Leave type
-            <select value={label} onChange={(event) => setLabel(event.target.value)}>
+            <select value={leaveType} onChange={(event) => setLeaveType(event.target.value)}>
               <option>Annual leave</option>
               <option>Unpaid leave</option>
               <option>Other</option>
@@ -111,7 +122,8 @@ export function AdminAddLeaveModal({
           </div>
           {selectedEmployee && (
             <p className="field-helper">
-              Based on {selectedEmployee.name}&apos;s working pattern ({formatWorkingWeek(selectedEmployee.workingDays)}).
+              Based on {selectedEmployee.name}&apos;s working pattern (
+              {formatWorkingWeek(selectedEmployee.workingDays)}).
             </p>
           )}
         </div>
@@ -122,8 +134,10 @@ export function AdminAddLeaveModal({
           <button
             type="button"
             className="button button-primary"
-            onClick={() => onSubmit({ employeeId, start: startDate, end: endDate, label })}
-            disabled={!employeeId || !startDate || !endDate || endDate < startDate}
+            onClick={() =>
+              onSubmit({ employeeId, start: startDate, end: endDate, leaveType })
+            }
+            disabled={!employeeId || !startDate || !endDate || endDate < startDate || dayCount <= 0}
           >
             Add leave <ChevronRight size={15} />
           </button>
@@ -149,7 +163,7 @@ export function LeaveModal({
   bankHolidays: BankHoliday[]
   leaveYear: LeaveYearPeriod
   absences: AbsenceRecord[]
-  requests: LeaveRequest[]
+  requests: import('../domain').LeaveRequest[]
   adjustments?: LeaveAdjustment[]
   onClose: () => void
   onSubmit: (payload: {
@@ -161,8 +175,9 @@ export function LeaveModal({
   }) => void
 }) {
   const entitlementSettings = companyEntitlementSettings(company)
-  const [startDate, setStartDate] = useState('2026-09-18')
-  const [endDate, setEndDate] = useState('2026-09-19')
+  const defaults = defaultLeaveDates()
+  const [startDate, setStartDate] = useState(defaults.start)
+  const [endDate, setEndDate] = useState(defaults.end)
   const [leaveType, setLeaveType] = useState('Annual leave')
   const [note, setNote] = useState('')
   const dayCount = useMemo(
@@ -172,8 +187,13 @@ export function LeaveModal({
         : countWeekdaysInRange(startDate, endDate),
     [startDate, endDate, employee],
   )
+  const isAnnual = leaveRequestTypeFromLabel(leaveType) === 'annual'
+  const yearDayCount =
+    employee && leaveYear
+      ? leaveDaysInLeaveYear(startDate, endDate, leaveYear, employee.workingDays)
+      : dayCount
   const remainingAfter =
-    employee && leaveType === 'Annual leave' && dayCount > 0
+    employee && isAnnual && yearDayCount > 0
       ? remainingAnnualLeave(
           employee,
           entitlementSettings,
@@ -181,7 +201,7 @@ export function LeaveModal({
           absences,
           requests,
           leaveYear,
-          dayCount,
+          yearDayCount,
           undefined,
           adjustments,
         )
@@ -234,7 +254,7 @@ export function LeaveModal({
                 : '—'}
             </strong>
           </div>
-          {employee && leaveType === 'Annual leave' && dayCount > 0 && remainingAfter !== null && (
+          {employee && isAnnual && dayCount > 0 && remainingAfter !== null && (
             <div className={`allowance-preview ${overAllowance ? 'allowance-preview-warning' : ''}`}>
               <span>Balance after this request</span>
               <strong className={overAllowance ? 'negative-number' : ''}>

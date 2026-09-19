@@ -41,12 +41,48 @@ export function nextPolicyAccent(policies: PolicyDocument[]): PolicyAccent {
   )
 }
 
+export function policyPreviewKind(
+  policy: PolicyDocument,
+): 'text' | 'image' | 'pdf' | 'other' {
+  const type = policy.fileType.toLowerCase()
+  const name = policy.fileName.toLowerCase()
+  if (
+    type.startsWith('text/') ||
+    type.includes('json') ||
+    name.endsWith('.txt') ||
+    policy.fileDataUrl.startsWith('data:text/')
+  ) {
+    return 'text'
+  }
+  if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
+    return 'image'
+  }
+  if (type === 'application/pdf' || name.endsWith('.pdf')) {
+    return 'pdf'
+  }
+  return 'other'
+}
+
+export function readPolicyText(policy: PolicyDocument) {
+  try {
+    const comma = policy.fileDataUrl.indexOf(',')
+    if (comma < 0) return policy.description || policy.title
+    const meta = policy.fileDataUrl.slice(0, comma)
+    const payload = policy.fileDataUrl.slice(comma + 1)
+    if (meta.includes(';base64')) {
+      return decodeURIComponent(escape(atob(payload)))
+    }
+    return decodeURIComponent(payload)
+  } catch {
+    return policy.description || policy.title
+  }
+}
+
+/** @deprecated Prefer in-app PolicyViewerModal — popup/data-URL opens are often blocked. */
 export function openPolicyDocument(policy: PolicyDocument) {
   const link = window.document.createElement('a')
   link.href = policy.fileDataUrl
-  link.target = '_blank'
-  link.rel = 'noopener noreferrer'
-  if (policy.fileName) link.download = policy.fileName
+  link.download = policy.fileName || `${policy.title}.txt`
   window.document.body.appendChild(link)
   link.click()
   link.remove()

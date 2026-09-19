@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   CalendarDays,
   Check,
@@ -32,7 +33,7 @@ import {
 import { daysUntilLeaveYearEnd, formatLeaveYearLabel, type LeaveYearPeriod } from '../leaveYear'
 import {
   formatBalanceAmount,
-  parseDurationDays,
+  leaveDaysInLeaveYear,
   remainingAnnualLeave,
   totalLeaveAllowance,
 } from '../leaveBalance'
@@ -44,7 +45,8 @@ import {
 } from '../mandatoryLeave'
 import type { LeaveAdjustment } from '../leaveAdjustments'
 import { leaveRequestTypeLabel, isAnnualLeaveRequest } from '../leaveTypes'
-import { formatPolicyUpdatedAt, openPolicyDocument, sortedPolicies } from '../policies'
+import { formatPolicyUpdatedAt, sortedPolicies } from '../policies'
+import { PolicyViewerModal } from '../modals/PolicyViewerModal'
 import { formatDisplayDate, parseIsoDate, type AbsenceRecord, type BankHoliday } from '../payroll'
 import { toIsoDate } from '../calendarUtils'
 
@@ -75,6 +77,7 @@ export function EmployeeDashboard({
   onNavigate,
   onNotify,
 }: EmployeeDashboardProps) {
+  const [viewingPolicy, setViewingPolicy] = useState<PolicyDocument | null>(null)
   const entitlementSettings = companyEntitlementSettings(company)
   const remaining = employee
     ? remainingAnnualLeave(
@@ -118,7 +121,7 @@ export function EmployeeDashboard({
     <div className="page">
       <PageHeader
         eyebrow="Monday, 31 August 2026"
-        title="Good morning, Sophie"
+        title={`Good morning, ${employee?.name.split(' ')[0] ?? 'there'}`}
         description="Here’s a quick look at your time away and company updates."
         action={
           <button type="button" className="button button-primary" onClick={requestLeave}>
@@ -339,10 +342,7 @@ export function EmployeeDashboard({
                   type="button"
                   className="policy-row policy-row-button"
                   key={policy.id}
-                  onClick={() => {
-                    openPolicyDocument(policy)
-                    onNotify(`${policy.title} opened`)
-                  }}
+                  onClick={() => setViewingPolicy(policy)}
                 >
                   <div className="document-icon">
                     {policy.accent === 'lavender' ? (
@@ -368,8 +368,7 @@ export function EmployeeDashboard({
             <span className="eyebrow">Friendly reminder</span>
             <h2>Take your time</h2>
             <p>
-              You have {formatBalanceAmount(remaining, employee?.entitlementUnit ?? 'days')} left to use
-              before {formatDisplayDate(leaveYear.end)}.
+              {`You have ${formatBalanceAmount(remaining, employee?.entitlementUnit ?? 'days')} left to use before ${formatDisplayDate(leaveYear.end)}.`}
             </p>
           </div>
           <button type="button" className="button button-dark" onClick={requestLeave}>
@@ -377,6 +376,9 @@ export function EmployeeDashboard({
           </button>
         </div>
       </section>
+      {viewingPolicy && (
+        <PolicyViewerModal policy={viewingPolicy} onClose={() => setViewingPolicy(null)} />
+      )}
     </div>
   )
 }
@@ -599,7 +601,14 @@ export function AdminDashboard({
                       absences,
                       requests,
                       leaveYear,
-                      parseDurationDays(request.duration),
+                      request.start && request.end
+                        ? leaveDaysInLeaveYear(
+                            request.start,
+                            request.end,
+                            leaveYear,
+                            employee.workingDays,
+                          )
+                        : 0,
                       request.id,
                       adjustments,
                     )

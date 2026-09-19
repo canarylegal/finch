@@ -39,6 +39,239 @@ button {
   background: var(--canvas);
 }
 
+.login-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 32px 20px;
+  background:
+    radial-gradient(ellipse 80% 60% at 10% 0%, #e8f3ec 0%, transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 100%, #fff0ec 0%, transparent 50%),
+    var(--canvas);
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  padding: 32px 28px 28px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+  color: var(--navy);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.login-panel h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  letter-spacing: -0.03em;
+}
+
+.login-lede {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #53676a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.login-form input {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.login-error {
+  margin: 0;
+  padding: 10px 12px;
+  color: #b54a3c;
+  background: var(--coral-wash);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.login-form .button {
+  margin-top: 4px;
+  justify-content: center;
+}
+
+.login-demo {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.login-demo strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #40565a;
+  font-size: 12px;
+}
+
+.login-demo > p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.login-demo code {
+  padding: 1px 5px;
+  color: var(--navy);
+  background: #eef3f0;
+  border-radius: 4px;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+}
+
+.login-demo ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.login-demo-fill {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  color: inherit;
+  text-align: left;
+  background: #f7faf8;
+  border: 1px solid #e2ebe6;
+  border-radius: 8px;
+}
+
+.login-demo-fill:hover {
+  background: #eef5f0;
+}
+
+.login-demo-fill span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.login-demo-fill small {
+  color: #7a8a87;
+  font-size: 10px;
+}
+
+.account-admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.account-admin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 14px;
+  background: #fafbfa;
+  border: 1px solid #edf1ee;
+  border-radius: 8px;
+}
+
+.account-admin-row strong {
+  display: block;
+  color: #40565a;
+  font-size: 12px;
+}
+
+.account-admin-row span {
+  color: #7a8a87;
+  font-size: 10px;
+}
+
+.account-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.account-admin-actions .button {
+  padding: 6px 10px;
+  font-size: 10px;
+}
+
+.policy-viewer-modal .modal-header .field-helper {
+  margin: 4px 0 0;
+}
+
+.policy-viewer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: min(60vh, 520px);
+  overflow: auto;
+  padding: 4px 2px 8px;
+}
+
+.policy-viewer-description {
+  margin: 0;
+  color: #6e8a7e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.policy-viewer-text {
+  margin: 0;
+  padding: 14px 16px;
+  color: #40565a;
+  background: #f7faf8;
+  border: 1px solid #e2ebe6;
+  border-radius: 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.policy-viewer-image {
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid #e2ebe6;
+}
+
+.policy-viewer-frame {
+  width: 100%;
+  min-height: 420px;
+  border: 1px solid #e2ebe6;
+  border-radius: 10px;
+  background: white;
+}
+
 .sidebar {
   position: fixed;
   inset: 0 auto 0 0;
@@ -413,6 +646,14 @@ button {
 
 .role-switch:hover {
   border-color: #b4c8c2;
+}
+
+div.role-switch {
+  cursor: default;
+}
+
+div.role-switch:hover {
+  border-color: var(--line);
 }
 
 .role-indicator {
@@ -2632,6 +2873,7 @@ button.toggle {
 
 .absence-pill-maternity,
 .absence-pill-unpaid_leave,
+.absence-pill-other_leave,
 .absence-pill-adjustment {
   color: #5f9d88;
   background: #e8f4ed;

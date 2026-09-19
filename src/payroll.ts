@@ -4,6 +4,7 @@ export type AbsenceType =
   | 'sick_unpaid'
   | 'maternity'
   | 'unpaid_leave'
+  | 'other_leave'
   | 'bank_holiday'
   | 'adjustment'
 
@@ -62,6 +63,7 @@ export const ABSENCE_TYPE_LABELS: Record<AbsenceType, string> = {
   sick_unpaid: 'Sick leave (unpaid)',
   maternity: 'Maternity leave',
   unpaid_leave: 'Unpaid leave',
+  other_leave: 'Other',
   bank_holiday: 'Bank holiday',
   adjustment: 'Adjustment',
 }
@@ -358,14 +360,23 @@ export function buildPayrollReport({
         periodEnd,
         workingDays,
       )
-      const unpaidLeaveDays = sumAbsenceDaysInPeriod(
-        absences,
-        employee.id,
-        'unpaid_leave',
-        periodStart,
-        periodEnd,
-        workingDays,
-      )
+      const unpaidLeaveDays =
+        sumAbsenceDaysInPeriod(
+          absences,
+          employee.id,
+          'unpaid_leave',
+          periodStart,
+          periodEnd,
+          workingDays,
+        ) +
+        sumAbsenceDaysInPeriod(
+          absences,
+          employee.id,
+          'other_leave',
+          periodStart,
+          periodEnd,
+          workingDays,
+        )
       const employeeBankHolidayDays = sumAbsenceDaysInPeriod(
         absences,
         employee.id,
@@ -466,28 +477,6 @@ export function absenceTypeColor(type: AbsenceType): 'coral' | 'lavender' | 'min
 export const initialAbsences: AbsenceRecord[] = [
   {
     id: 1,
-    employeeId: 2,
-    type: 'annual_leave',
-    start: '2026-09-08',
-    end: '2026-09-12',
-    amount: 5,
-    note: 'Family holiday',
-    recordedBy: 'Alex Morgan',
-    recordedAt: '2026-08-20',
-  },
-  {
-    id: 2,
-    employeeId: 3,
-    type: 'annual_leave',
-    start: '2026-09-24',
-    end: '2026-09-24',
-    amount: 1,
-    note: 'Personal day',
-    recordedBy: 'Alex Morgan',
-    recordedAt: '2026-08-22',
-  },
-  {
-    id: 3,
     employeeId: 1,
     type: 'sick_paid',
     start: '2026-08-04',

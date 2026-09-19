@@ -183,6 +183,19 @@ export type StoredLeaveYearClosure = {
   }[]
 }
 
+export type StoredAccount = {
+  id: number
+  email: string
+  displayName: string
+  initials: string
+  role: 'admin' | 'employee'
+  employeeId: number | null
+  passwordSalt: string
+  passwordHash: string
+  status: 'Active' | 'Inactive'
+  jobTitle?: string
+}
+
 export type FinchAppData = {
   employees: StoredEmployee[]
   absences: AbsenceRecord[]
@@ -192,7 +205,9 @@ export type FinchAppData = {
   portalMessages?: StoredPortalMessage[]
   documentFolders?: StoredDocumentFolder[]
   employeeDocuments?: StoredEmployeeDocument[]
+  /** @deprecated Identity now uses finch-session + accounts */
   preferAdminView?: boolean
+  accounts?: StoredAccount[]
   expenseClaims?: StoredExpenseClaim[]
   taskDismissals?: StoredTaskDismissal[]
   policies?: StoredPolicyDocument[]

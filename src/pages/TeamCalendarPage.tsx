@@ -27,7 +27,9 @@ export function TeamCalendar({
   onAddLeave,
   onViewList,
 }: TeamCalendarProps) {
-  const [viewDate, setViewDate] = useState(new Date(2026, 8, 1))
+  const [viewDate, setViewDate] = useState(
+    () => new Date(APP_TODAY.getFullYear(), APP_TODAY.getMonth(), 1),
+  )
   const today = APP_TODAY
   const cells = useMemo(() => buildMonthGrid(viewDate), [viewDate])
   const bankHolidayByDate = useMemo(() => {

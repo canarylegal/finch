@@ -31,7 +31,7 @@ export function absenceTypeForLeaveRequest(type: LeaveRequestType | undefined): 
     case 'unpaid':
       return 'unpaid_leave'
     case 'other':
-      return 'unpaid_leave'
+      return 'other_leave'
     default:
       return 'annual_leave'
   }

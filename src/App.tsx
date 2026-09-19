@@ -35,6 +35,7 @@ import {
 } from './domain'
 import { getLeaveYearPeriod } from './leaveYear'
 import {
+  leaveDaysInLeaveYear,
   overAllowanceMessage,
   parseDurationDays,
   remainingAnnualLeave,
@@ -53,10 +54,20 @@ import {
   buildLeaveAmendment,
   buildLeaveRequestFields,
 } from './leaveRequestHelpers'
+import { createPortalMessage } from './portalMessages'
 import {
-  ADMIN_DISPLAY_NAME,
-  createPortalMessage,
-} from './portalMessages'
+  activeAdminCount,
+  accountInitialsFromName,
+  clearSession,
+  createAccountCredentials,
+  ensureAccounts,
+  initialAccounts,
+  loadSession,
+  nextAccountId,
+  resolveSessionAccount,
+  type Account,
+} from './auth'
+import { LoginPage } from './pages/LoginPage'
 import {
   createDefaultFoldersForEmployee,
   documentCountInFolder,
@@ -130,7 +141,12 @@ import './App.css'
 
 function App() {
   const persisted = readPersistedState()
-  const [isAdmin, setIsAdmin] = useState(persisted?.preferAdminView ?? false)
+  const [accounts, setAccounts] = useState<Account[]>(
+    () => ensureAccounts(persisted?.accounts ?? initialAccounts()),
+  )
+  const [sessionAccount, setSessionAccount] = useState<Account | null>(() =>
+    resolveSessionAccount(ensureAccounts(persisted?.accounts ?? initialAccounts()), loadSession()),
+  )
   const [activeNav, setActiveNav] = useState('Overview')
   const [requests, setRequests] = useState(persisted?.requests ?? initialRequests)
   const [portalMessages, setPortalMessages] = useState(
@@ -184,7 +200,7 @@ function App() {
     policies?: typeof policies
     leaveAdjustments?: LeaveAdjustment[]
     leaveYearClosures?: LeaveYearClosure[]
-    preferAdminView?: boolean
+    accounts?: Account[]
   } = {}) =>
     saveFinchAppData({
       employees,
@@ -195,7 +211,7 @@ function App() {
       portalMessages,
       documentFolders,
       employeeDocuments,
-      preferAdminView: overrides.preferAdminView ?? isAdmin,
+      accounts: overrides.accounts ?? accounts,
       expenseClaims: overrides.expenseClaims ?? expenseClaims,
       taskDismissals: overrides.taskDismissals ?? taskDismissals,
       policies: overrides.policies ?? policies,
@@ -205,8 +221,29 @@ function App() {
 
   useEffect(() => {
     persistAppData()
-  }, [employees, absences, company, bankHolidays, requests, portalMessages, documentFolders, employeeDocuments, isAdmin, expenseClaims, taskDismissals, policies, leaveAdjustments, leaveYearClosures])
+  }, [
+    employees,
+    absences,
+    company,
+    bankHolidays,
+    requests,
+    portalMessages,
+    documentFolders,
+    employeeDocuments,
+    accounts,
+    expenseClaims,
+    taskDismissals,
+    policies,
+    leaveAdjustments,
+    leaveYearClosures,
+  ])
 
+  const isAdmin = sessionAccount?.role === 'admin'
+  const actorDisplayName = sessionAccount?.displayName ?? 'Unknown'
+  const currentEmployee =
+    sessionAccount?.employeeId != null
+      ? employees.find((item) => item.id === sessionAccount.employeeId)
+      : undefined
   const pendingCount =
     requests.filter((request) => request.status === 'Pending').length +
     pendingExpenseCount(expenseClaims)
@@ -225,17 +262,32 @@ function App() {
     window.setTimeout(() => setToast(''), 2800)
   }
 
+  const signOut = () => {
+    clearSession()
+    setSessionAccount(null)
+    setActiveNav('Overview')
+    setMobileNavOpen(false)
+    notify('Signed out')
+  }
+
   const openRequestLeave = () => {
     if (!company.leaveYearConfigured) {
       notify(LEAVE_NOT_CONFIGURED_EMPLOYEE_MESSAGE)
+      return
+    }
+    if (!currentEmployee) {
+      notify('Your account is not linked to an employee record')
       return
     }
     setIsLeaveModalOpen(true)
   }
 
   const openSettings = (tab: SettingsTab = 'company') => {
+    if (!isAdmin) {
+      notify('Only admins can open settings')
+      return
+    }
     setSettingsTab(tab)
-    setIsAdmin(true)
     setActiveNav('Settings')
     setMobileNavOpen(false)
   }
@@ -246,7 +298,7 @@ function App() {
       {
         ...record,
         id: Math.max(0, ...current.map((item) => item.id)) + 1,
-        recordedAt: toIsoDate(new Date()),
+        recordedAt: toIsoDate(APP_TODAY),
       },
     ])
   }
@@ -301,7 +353,7 @@ function App() {
         folderId,
         ...payload,
         uploadedAt: new Date().toISOString(),
-        uploadedBy: ADMIN_DISPLAY_NAME,
+        uploadedBy: actorDisplayName,
       },
     ])
     notify('Document uploaded')
@@ -338,7 +390,7 @@ function App() {
         employeeId: employee.id,
         requestId,
         author,
-        authorName: author === 'admin' ? ADMIN_DISPLAY_NAME : employee.name,
+        authorName: author === 'admin' ? actorDisplayName : employee.name,
         body,
       }),
     ])
@@ -391,7 +443,16 @@ function App() {
     const amount = countWorkingDaysInRange(amendment.start, amendment.end, employee.workingDays)
 
     if (isAnnualLeaveRequest(request)) {
-      const currentDays = parseDurationDays(request.duration)
+      const currentDays =
+        request.start && request.end
+          ? leaveDaysInLeaveYear(request.start, request.end, leaveYear, employee.workingDays)
+          : parseDurationDays(request.duration)
+      const newDays = leaveDaysInLeaveYear(
+        amendment.start,
+        amendment.end,
+        leaveYear,
+        employee.workingDays,
+      )
       const remainingAfter = remainingAnnualLeave(
         employee,
         companyEntitlementSettings(company),
@@ -399,7 +460,7 @@ function App() {
         absences,
         requests,
         leaveYear,
-        Math.max(0, amount - currentDays),
+        newDays - currentDays,
         id,
         leaveAdjustments,
       )
@@ -440,7 +501,7 @@ function App() {
           end: amendment.end,
           amount,
           note: amendment.note || 'Approved leave amendment',
-          recordedBy: ADMIN_DISPLAY_NAME,
+          recordedBy: actorDisplayName,
           recordedAt,
         },
       ])
@@ -468,7 +529,10 @@ function App() {
       employees.find((item) => item.name === request?.name)
 
     if (status === 'Approved' && request && employee && isAnnualLeaveRequest(request)) {
-      const days = parseDurationDays(request.duration)
+      const days =
+        request.start && request.end
+          ? leaveDaysInLeaveYear(request.start, request.end, leaveYear, employee.workingDays)
+          : parseDurationDays(request.duration)
       const remainingAfter = remainingAnnualLeave(
         employee,
         companyEntitlementSettings(company),
@@ -496,13 +560,13 @@ function App() {
         {
           employeeId: employee.id,
           type: absenceTypeForLeaveRequest(request.leaveType),
-          start: request.start ?? toIsoDate(new Date()),
-          end: request.end ?? request.start ?? toIsoDate(new Date()),
+          start: request.start ?? toIsoDate(APP_TODAY),
+          end: request.end ?? request.start ?? toIsoDate(APP_TODAY),
           amount: days,
           note: request.note || 'Approved leave request',
-          recordedBy: ADMIN_DISPLAY_NAME,
+          recordedBy: actorDisplayName,
           id: newAbsenceId,
-          recordedAt: toIsoDate(new Date()),
+          recordedAt: toIsoDate(APP_TODAY),
         },
       ])
       setRequests((current) =>
@@ -566,7 +630,7 @@ function App() {
         confirmation: nextConfirmation,
         existingRequests: requests,
         existingAbsences: absences,
-        recordedBy: ADMIN_DISPLAY_NAME,
+        recordedBy: actorDisplayName,
       })
       setRequests(booked.requests)
       setAbsences(booked.absences)
@@ -602,10 +666,16 @@ function App() {
       notify(LEAVE_NOT_CONFIGURED_EMPLOYEE_MESSAGE)
       return
     }
-    const employee = employees.find((item) => item.name === 'Sophie Carter')
+    const employee = currentEmployee
     if (!employee) return
 
     if (payload.leaveType === 'Annual leave') {
+      const yearDays = leaveDaysInLeaveYear(
+        payload.start,
+        payload.end,
+        leaveYear,
+        employee.workingDays,
+      )
       const remainingAfter = remainingAnnualLeave(
         employee,
         companyEntitlementSettings(company),
@@ -613,7 +683,7 @@ function App() {
         absences,
         requests,
         leaveYear,
-        payload.days,
+        yearDays,
         undefined,
         leaveAdjustments,
       )
@@ -662,7 +732,7 @@ function App() {
     note?: string
     receipts: Omit<ExpenseReceipt, 'id'>[]
   }) => {
-    const employee = employees.find((item) => item.name === 'Sophie Carter')
+    const employee = currentEmployee
     if (!employee) return false
 
     const nextClaims = [
@@ -861,45 +931,60 @@ function App() {
     employeeId: number
     start: string
     end: string
-    label: string
+    leaveType: string
   }) => {
     const employee = employees.find((item) => item.id === payload.employeeId)
     if (!employee) return
 
+    const leaveType = leaveRequestTypeFromLabel(payload.leaveType)
     const days = countWorkingDaysInRange(payload.start, payload.end, employee.workingDays)
-    const remainingAfter = remainingAnnualLeave(
-      employee,
-      companyEntitlementSettings(company),
-      bankHolidays,
-      absences,
-      requests,
-      leaveYear,
-      days,
-      undefined,
-      leaveAdjustments,
-    )
-    if (remainingAfter < 0) {
-      const proceed = window.confirm(
-        overAllowanceMessage(employee.name, Math.abs(remainingAfter), employee.entitlementUnit),
+
+    if (leaveType === 'annual') {
+      const yearDays = leaveDaysInLeaveYear(
+        payload.start,
+        payload.end,
+        leaveYear,
+        employee.workingDays,
       )
-      if (!proceed) return
+      const remainingAfter = remainingAnnualLeave(
+        employee,
+        companyEntitlementSettings(company),
+        bankHolidays,
+        absences,
+        requests,
+        leaveYear,
+        yearDays,
+        undefined,
+        leaveAdjustments,
+      )
+      if (remainingAfter < 0) {
+        const proceed = window.confirm(
+          overAllowanceMessage(employee.name, Math.abs(remainingAfter), employee.entitlementUnit),
+        )
+        if (!proceed) return
+      }
     }
 
     const absenceId = Math.max(0, ...absences.map((item) => item.id)) + 1
     const requestId = Math.max(0, ...requests.map((item) => item.id)) + 1
-    const fields = buildLeaveRequestFields(payload.start, payload.end, days, payload.label)
+    const fields = buildLeaveRequestFields(
+      payload.start,
+      payload.end,
+      days,
+      payload.leaveType === 'Annual leave' ? 'Admin-added leave' : payload.leaveType,
+    )
 
     setAbsences((current) => [
       ...current,
       {
         id: absenceId,
         employeeId: employee.id,
-        type: 'annual_leave',
+        type: absenceTypeForLeaveRequest(leaveType),
         start: payload.start,
         end: payload.end,
         amount: days,
-        note: payload.label || 'Admin-added leave',
-        recordedBy: ADMIN_DISPLAY_NAME,
+        note: payload.leaveType || 'Admin-added leave',
+        recordedBy: actorDisplayName,
         recordedAt: toIsoDate(APP_TODAY),
       },
     ])
@@ -913,7 +998,7 @@ function App() {
         color: employee.color,
         ...fields,
         status: 'Approved',
-        leaveType: 'annual',
+        leaveType,
         absenceId,
       },
     ])
@@ -944,7 +1029,7 @@ function App() {
         amount: payload.amount,
         reason: payload.reason,
         effectiveDate: payload.effectiveDate,
-        recordedBy: ADMIN_DISPLAY_NAME,
+        recordedBy: actorDisplayName,
         recordedAt: toIsoDate(APP_TODAY),
       },
     ])
@@ -953,6 +1038,22 @@ function App() {
       payload.direction === 'credit'
         ? `Credit of ${payload.amount} ${adjustmentEmployee.entitlementUnit} recorded`
         : `Debit of ${payload.amount} ${adjustmentEmployee.entitlementUnit} recorded`,
+    )
+  }
+
+  if (!sessionAccount) {
+    return (
+      <>
+        <LoginPage
+          accounts={accounts}
+          onSignedIn={(account) => {
+            setSessionAccount(account)
+            setActiveNav('Overview')
+            notify(`Signed in as ${account.displayName}`)
+          }}
+        />
+        {toast && <div className="toast">{toast}</div>}
+      </>
     )
   }
 
@@ -974,11 +1075,6 @@ function App() {
           logoUrl={company.logoUrl}
           isAdmin={isAdmin}
           onOpenSettings={() => openSettings('company')}
-          onSwitchView={() => {
-            setIsAdmin(!isAdmin)
-            setActiveNav('Overview')
-            notify(isAdmin ? 'Switched to employee view' : 'Switched to admin view')
-          }}
           onNotify={notify}
         />
 
@@ -1013,10 +1109,14 @@ function App() {
             <span>Help centre</span>
           </button>
           <div className="user-chip">
-            <div className="avatar avatar-sage">{isAdmin ? 'AM' : 'SC'}</div>
+            <div className="avatar avatar-sage">{sessionAccount.initials}</div>
             <div>
-              <strong>{isAdmin ? 'Alex Morgan' : 'Sophie Carter'}</strong>
-              <span>{isAdmin ? 'Master admin' : 'Product designer'}</span>
+              <strong>{sessionAccount.displayName}</strong>
+              <span>
+                {sessionAccount.jobTitle ??
+                  currentEmployee?.role ??
+                  (isAdmin ? 'Admin' : 'Employee')}
+              </span>
             </div>
             <MoreMenu
               placement="top"
@@ -1030,29 +1130,13 @@ function App() {
                         label: 'Workspace settings',
                         onClick: () => openSettings('company'),
                       },
-                      {
-                        label: 'Switch to employee view',
-                        onClick: () => {
-                          setIsAdmin(false)
-                          setActiveNav('Overview')
-                          notify('Switched to employee view')
-                        },
-                      },
-                      { label: 'Sign out', onClick: () => notify('Signed out'), danger: true },
+                      { label: 'Sign out', onClick: signOut, danger: true },
                     ]
                   : [
                       { label: 'My profile', onClick: () => notify('Profile settings opened') },
                       { label: 'My leave', onClick: () => setActiveNav('My leave') },
                       { label: 'Expenses', onClick: () => setActiveNav('Expenses') },
-                      {
-                        label: 'Switch to admin view',
-                        onClick: () => {
-                          setIsAdmin(true)
-                          setActiveNav('Overview')
-                          notify('Switched to admin view')
-                        },
-                      },
-                      { label: 'Sign out', onClick: () => notify('Signed out'), danger: true },
+                      { label: 'Sign out', onClick: signOut, danger: true },
                     ]
               }
             />
@@ -1085,18 +1169,10 @@ function App() {
               <Bell size={18} />
               <span className="notification-dot" />
             </button>
-            <button
-              type="button"
-              className={`role-switch ${isAdmin ? 'admin-mode' : ''}`}
-              onClick={() => {
-                setIsAdmin(!isAdmin)
-                setActiveNav('Overview')
-                notify(isAdmin ? 'Switched to employee view' : 'Switched to admin view')
-              }}
-            >
+            <div className={`role-switch ${isAdmin ? 'admin-mode' : ''}`} aria-label="Signed-in role">
               <span className="role-indicator" />
-              {isAdmin ? 'Admin view' : 'Employee view'}
-            </button>
+              {isAdmin ? 'Admin' : 'Employee'}
+            </div>
           </div>
         </header>
 
@@ -1133,7 +1209,7 @@ function App() {
             />
           ) : (
             <EmployeeDashboard
-              employee={employees.find((item) => item.name === 'Sophie Carter')}
+              employee={currentEmployee}
               absences={absences}
               requests={requests}
               policies={policies}
@@ -1201,6 +1277,7 @@ function App() {
             closures={leaveYearClosures}
             leaveYear={leaveYear}
             today={APP_TODAY}
+            closedByName={actorDisplayName}
             onConfirmClose={(result) => {
               setLeaveYearClosures(result.closures)
               setLeaveAdjustments(result.adjustments)
@@ -1255,14 +1332,14 @@ function App() {
         )}
         {activeNav === 'Documents' && !isAdmin && (
           <Documents
-            employee={employees.find((item) => item.name === 'Sophie Carter')}
+            employee={currentEmployee}
             folders={documentFolders}
             documents={employeeDocuments}
           />
         )}
         {activeNav === 'My leave' && !isAdmin && (
           <MyLeavePage
-            employee={employees.find((item) => item.name === 'Sophie Carter')}
+            employee={currentEmployee}
             absences={absences}
             requests={requests}
             company={company}
@@ -1276,29 +1353,90 @@ function App() {
         )}
         {activeNav === 'Expenses' && !isAdmin && (
           <ExpensesPage
-            employee={employees.find((item) => item.name === 'Sophie Carter')}
+            employee={currentEmployee}
             claims={expenseClaims}
             onSubmitClaim={() => setIsExpenseModalOpen(true)}
             onOpenClaim={setActiveExpenseClaimId}
           />
         )}
-        {activeNav === 'Settings' && isAdmin && (
+        {activeNav === 'Settings' && isAdmin && sessionAccount && (
           <SettingsPage
             company={company}
             bankHolidays={bankHolidays}
             leaveYear={leaveYear}
             initialTab={settingsTab}
+            accounts={accounts}
+            employees={employees}
+            currentAccountId={sessionAccount.id}
             onSave={saveCompanySettings}
             onBankHolidaysChange={setBankHolidays}
             onNotify={notify}
             onOpenLeaveYears={() => handleNavigation('Leave years')}
+            onUpdateAccount={(account) => {
+              if (
+                account.role !== 'admin' &&
+                account.id !== sessionAccount.id &&
+                accounts.find((item) => item.id === account.id)?.role === 'admin' &&
+                activeAdminCount(accounts) <= 1
+              ) {
+                notify('Keep at least one active admin')
+                return
+              }
+              if (
+                account.status === 'Inactive' &&
+                account.role === 'admin' &&
+                activeAdminCount(accounts.filter((item) => item.id !== account.id)) < 1 &&
+                accounts.find((item) => item.id === account.id)?.status === 'Active'
+              ) {
+                notify('Keep at least one active admin')
+                return
+              }
+              setAccounts((current) =>
+                current.map((item) => (item.id === account.id ? account : item)),
+              )
+              if (account.id === sessionAccount.id) {
+                if (account.status === 'Inactive') {
+                  signOut()
+                  return
+                }
+                setSessionAccount(account)
+                if (account.role !== 'admin' && activeNav === 'Settings') {
+                  setActiveNav('Overview')
+                }
+              }
+              notify(`${account.displayName} updated`)
+            }}
+            onAddAccount={async (payload) => {
+              const email = payload.email.trim().toLowerCase()
+              if (!email || !payload.displayName.trim() || !payload.password) {
+                return 'Email, name, and password are required'
+              }
+              if (accounts.some((item) => item.email.toLowerCase() === email)) {
+                return 'An account with that email already exists'
+              }
+              const credentials = await createAccountCredentials(payload.password)
+              const account: Account = {
+                id: nextAccountId(accounts),
+                email,
+                displayName: payload.displayName.trim(),
+                initials: accountInitialsFromName(payload.displayName),
+                role: payload.role,
+                employeeId: payload.employeeId,
+                status: 'Active',
+                jobTitle: payload.jobTitle,
+                ...credentials,
+              }
+              setAccounts((current) => [...current, account])
+              notify(`Account created for ${account.displayName}`)
+              return null
+            }}
           />
         )}
       </main>
 
       {isLeaveModalOpen && (
         <LeaveModal
-          employee={employees.find((item) => item.name === 'Sophie Carter')}
+          employee={currentEmployee}
           company={company}
           bankHolidays={bankHolidays}
           absences={absences}

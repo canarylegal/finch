@@ -1,4 +1,5 @@
 import { toIsoDate } from './calendarUtils'
+import { APP_TODAY } from './domain'
 import type { PortalMessage } from './domain'
 
 export const ADMIN_DISPLAY_NAME = 'Alex Morgan'
@@ -27,11 +28,14 @@ export function unreadCountForRequest(messages: PortalMessage[], requestId: numb
 export function createPortalMessage(
   messages: PortalMessage[],
   payload: Omit<PortalMessage, 'id' | 'createdAt'>,
+  at: Date = APP_TODAY,
 ): PortalMessage {
+  // Keep demo timestamps aligned with APP_TODAY (noon UTC on that calendar day).
+  const createdAt = `${toIsoDate(at)}T12:00:00.000Z`
   return {
     ...payload,
     id: nextPortalMessageId(messages),
-    createdAt: new Date().toISOString(),
+    createdAt,
   }
 }
 

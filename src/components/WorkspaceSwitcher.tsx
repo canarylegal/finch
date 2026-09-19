@@ -7,7 +7,6 @@ export function WorkspaceSwitcher({
   logoUrl,
   isAdmin,
   onOpenSettings,
-  onSwitchView,
   onNotify,
 }: {
   companyName: string
@@ -15,7 +14,6 @@ export function WorkspaceSwitcher({
   logoUrl: string | null
   isAdmin: boolean
   onOpenSettings: () => void
-  onSwitchView: () => void
   onNotify: (message: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -74,21 +72,14 @@ export function WorkspaceSwitcher({
             <button
               type="button"
               role="menuitem"
-              onClick={() => onNotify('Only admins can change workspace settings')}
+              onClick={() => {
+                onNotify('Only admins can change workspace settings')
+                setOpen(false)
+              }}
             >
               Workspace settings
             </button>
           )}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              onSwitchView()
-              setOpen(false)
-            }}
-          >
-            Switch to {isAdmin ? 'employee' : 'admin'} view
-          </button>
         </div>
       )}
     </div>
