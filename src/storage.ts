@@ -217,6 +217,7 @@ export type FinchAppData = {
   policies?: StoredPolicyDocument[]
   leaveAdjustments?: StoredLeaveAdjustment[]
   leaveYearClosures?: StoredLeaveYearClosure[]
+  auditEvents?: import('./auditLog').AuditEvent[]
 }
 
 const STORAGE_KEY = 'finch-app-data'

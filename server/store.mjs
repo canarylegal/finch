@@ -65,6 +65,7 @@ export function emptyAppData() {
     policies: [],
     leaveAdjustments: [],
     leaveYearClosures: [],
+    auditEvents: [],
   }
 }
 

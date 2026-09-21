@@ -36,16 +36,10 @@ import {
   verifyTotpCode,
 } from './totp.mjs'
 import {
-  accountHasPasskey,
-  accountHasSecondFactor,
-  createAuthenticationOptions,
-  createRegistrationOptions,
-  publicPasskeyStatus,
-  removePasskey,
-  resolveWebAuthnConfig,
-  verifyAndStoreRegistration,
-  verifyAuthentication,
-} from './webauthn.mjs'
+  appendAuditEvent,
+  createAuditEvent,
+  mergeAuditEvents,
+} from './audit.mjs'
 
 dotenv.config()
 
@@ -485,6 +479,17 @@ app.post('/api/auth/2fa/confirm', twoFactorLimiter, async (req, res) => {
   account.totpEnabled = true
   account.totpPendingSecret = null
   account.totpRecoveryHashes = hashes
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'auth.totp.enabled',
+      summary: `${account.displayName || account.email} enabled authenticator 2FA`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
   await writeStore(store)
 
   if (session.kind === 'pending_2fa_setup') {
@@ -527,6 +532,17 @@ app.post('/api/auth/2fa/disable', async (req, res) => {
   account.totpSecret = null
   account.totpPendingSecret = null
   account.totpRecoveryHashes = []
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'auth.totp.disabled',
+      summary: `${account.displayName || account.email} disabled authenticator 2FA`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
   await writeStore(store)
   return res.json({ account: publicAccount(account) })
 })
@@ -580,6 +596,17 @@ app.post('/api/auth/webauthn/register/verify', twoFactorLimiter, async (req, res
     recoveryCodes = created.codes
   }
 
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'auth.passkey.added',
+      summary: `${account.displayName || account.email} added a passkey`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
   await writeStore(store)
 
   if (session.kind === 'pending_2fa_setup') {
@@ -669,6 +696,17 @@ app.post('/api/auth/webauthn/credentials/remove', async (req, res) => {
   }
 
   removePasskey(account, credentialId)
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'auth.passkey.removed',
+      summary: `${account.displayName || account.email} removed a passkey`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
   await writeStore(store)
   return res.json({ account: publicAccount(account) })
 })
@@ -774,12 +812,30 @@ app.put('/api/app-data', async (req, res) => {
   const incoming = req.body || {}
   const {
     accounts: _ignoredAccounts,
+    _auditAppend: rawAppend,
     ...appData
   } = incoming
 
   if (!appData.company) {
     return res.status(400).json({ error: 'Invalid app data' })
   }
+
+  const stampedAppend = Array.isArray(rawAppend)
+    ? rawAppend.map((item) =>
+        createAuditEvent({
+          ...item,
+          actorAccountId: account.id,
+          actorName: account.displayName || account.email,
+          id: typeof item?.id === 'string' ? item.id : undefined,
+          at: typeof item?.at === 'string' ? item.at : undefined,
+        }),
+      )
+    : []
+
+  const mergedAudit = mergeAuditEvents(
+    mergeAuditEvents(store.appData?.auditEvents, appData.auditEvents),
+    stampedAppend,
+  )
 
   store.appData = {
     ...emptyAppData(),
@@ -788,9 +844,10 @@ app.put('/api/app-data', async (req, res) => {
       ...emptyCompany(),
       ...appData.company,
     },
+    auditEvents: mergedAudit,
   }
   await writeStore(store)
-  res.json({ ok: true })
+  res.json({ ok: true, auditEvents: mergedAudit })
 })
 
 app.post('/api/accounts', async (req, res) => {
@@ -839,6 +896,17 @@ app.post('/api/accounts', async (req, res) => {
     passwordHash,
   }
   store.accounts.push(created)
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: actor.id,
+      actorName: actor.displayName || actor.email,
+      action: 'account.created',
+      summary: `${actor.displayName || actor.email} created account ${displayName} (${role})`,
+      entityType: 'account',
+      entityId: created.id,
+    }),
+  )
   await writeStore(store)
   res.status(201).json({ account: publicAccount(created) })
 })
@@ -915,6 +983,17 @@ app.patch('/api/accounts/:id', async (req, res) => {
     target.jobTitle = req.body.jobTitle
   }
 
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: actor.id,
+      actorName: actor.displayName || actor.email,
+      action: 'account.updated',
+      summary: `${actor.displayName || actor.email} updated account ${target.displayName || target.email}`,
+      entityType: 'account',
+      entityId: target.id,
+    }),
+  )
   await writeStore(store)
   res.json({ account: publicAccount(target), accounts: store.accounts.map(publicAccount) })
 })

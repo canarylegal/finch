@@ -28,6 +28,12 @@ import {
 } from './domain'
 import { emptyRuntimeData } from './emptyState'
 import {
+  appendAuditEvent,
+  createAuditEvent,
+  mergeAuditEvents,
+  type AuditEvent,
+} from './auditLog'
+import {
   createAccountRequest,
   emailPayrollReportRequest,
   fetchAppData,
@@ -36,6 +42,8 @@ import {
   saveAppData,
   updateAccountRequest,
 } from './api'
+import { AuditLogPage } from './pages/AuditLogPage'
+import { VatReceiptsPage } from './pages/VatReceiptsPage'
 import { getLeaveYearPeriod } from './leaveYear'
 import {
   leaveDaysInLeaveYear,
@@ -78,7 +86,6 @@ import { AdminRequests } from './pages/AdminRequestsPage'
 import { Documents } from './pages/DocumentsPage'
 import { Employees } from './pages/EmployeesPage'
 import { ExpensesPage } from './pages/ExpensesPage'
-import { VatReceiptsPage } from './pages/VatReceiptsPage'
 import { LeaveYearsPage } from './pages/LeaveYearsPage'
 import { MyLeavePage } from './pages/MyLeavePage'
 import {
@@ -164,6 +171,7 @@ function App() {
   const [leaveYearClosures, setLeaveYearClosures] = useState<LeaveYearClosure[]>(
     empty.leaveYearClosures,
   )
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(empty.auditEvents)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('company')
   const [absences, setAbsences] = useState<AbsenceRecord[]>(empty.absences)
   const [bankHolidays, setBankHolidays] = useState<BankHoliday[]>(empty.bankHolidays)
@@ -260,6 +268,11 @@ function App() {
         ? (data.leaveYearClosures as LeaveYearClosure[])
         : fallback.leaveYearClosures,
     )
+    setAuditEvents(
+      Array.isArray(data.auditEvents)
+        ? (data.auditEvents as AuditEvent[])
+        : fallback.auditEvents,
+    )
     return ensured
   }
 
@@ -293,6 +306,7 @@ function App() {
     policies?: typeof policies
     leaveAdjustments?: LeaveAdjustment[]
     leaveYearClosures?: LeaveYearClosure[]
+    auditEvents?: AuditEvent[]
     accounts?: Account[]
     company?: CompanySettings
   } = {}) => {
@@ -312,7 +326,11 @@ function App() {
       policies: overrides.policies ?? policies,
       leaveAdjustments: overrides.leaveAdjustments ?? leaveAdjustments,
       leaveYearClosures: overrides.leaveYearClosures ?? leaveYearClosures,
+      auditEvents: overrides.auditEvents ?? auditEvents,
     })
+    if (result.ok && Array.isArray(result.data.auditEvents)) {
+      setAuditEvents(result.data.auditEvents)
+    }
     return result.ok
   }
 
@@ -365,6 +383,7 @@ function App() {
     policies,
     leaveAdjustments,
     leaveYearClosures,
+    auditEvents,
   ])
 
   const autoPayrollAttemptedRef = useRef<string | null>(null)
@@ -412,6 +431,29 @@ function App() {
   const isAdminRole = sessionAccount?.role === 'admin'
   const isAdmin = Boolean(isAdminRole && adminWorkspaceView === 'admin')
   const actorDisplayName = sessionAccount?.displayName ?? 'Unknown'
+  const recordAudit = (input: {
+    action: Parameters<typeof createAuditEvent>[0]['action']
+    summary: string
+    entityType?: string
+    entityId?: string | number
+  }) => {
+    const event = createAuditEvent({
+      actorAccountId: sessionAccount?.id ?? null,
+      actorName: actorDisplayName,
+      action: input.action,
+      summary: input.summary,
+      entityType: input.entityType,
+      entityId: input.entityId,
+    })
+    setAuditEvents((current) => appendAuditEvent(current, event))
+  }
+  const refreshAuditEvents = async () => {
+    const result = await fetchAppData()
+    if (!result.ok) return
+    if (Array.isArray(result.data.auditEvents)) {
+      setAuditEvents(mergeAuditEvents(auditEvents, result.data.auditEvents as AuditEvent[]))
+    }
+  }
   const currentEmployee =
     sessionAccount?.employeeId != null
       ? employees.find((item) => item.id === sessionAccount.employeeId)
@@ -871,6 +913,14 @@ function App() {
     }
 
     notify(status === 'Approved' ? 'Leave request approved' : 'Leave request declined')
+    if (request && (status === 'Approved' || status === 'Declined')) {
+      recordAudit({
+        action: status === 'Approved' ? 'leave.approved' : 'leave.declined',
+        summary: `${actorDisplayName} ${status === 'Approved' ? 'approved' : 'declined'} leave for ${request.name} (${request.dates})`,
+        entityType: 'leave_request',
+        entityId: request.id,
+      })
+    }
     if (
       request &&
       (status === 'Approved' || status === 'Declined') &&
@@ -907,6 +957,12 @@ function App() {
       ),
     )
     notify('Leave cancelled')
+    recordAudit({
+      action: 'leave.cancelled',
+      summary: `${actorDisplayName} cancelled leave for ${request.name} (${request.dates})`,
+      entityType: 'leave_request',
+      entityId: request.id,
+    })
   }
 
   const deleteAbsence = (absenceId: number) => {
@@ -934,6 +990,11 @@ function App() {
     )
     const nextConfirmation = confirmationForLeaveYear(next.mandatoryLeaveConfirmations, leaveYear)
     setCompany(next)
+    recordAudit({
+      action: 'settings.updated',
+      summary: `${actorDisplayName} updated organisation settings`,
+      entityType: 'company',
+    })
 
     if (
       nextConfirmation &&
@@ -1125,6 +1186,12 @@ function App() {
     setExpenseClaims(nextClaims)
     setActiveExpenseClaimId(null)
     notify(status === 'Approved' ? 'Expense claim approved' : 'Expense claim declined')
+    recordAudit({
+      action: status === 'Approved' ? 'expense.approved' : 'expense.declined',
+      summary: `${actorDisplayName} ${status === 'Approved' ? 'approved' : 'declined'} expense for ${claim.name} (${formatGbp(claim.amount)})`,
+      entityType: 'expense_claim',
+      entityId: claim.id,
+    })
     if (shouldNotify(company, 'expenseClaimReviewed')) {
       void dispatchNotificationEmail('expenseClaimReviewed', {
         employeeId: claim.employeeId,
@@ -1789,6 +1856,14 @@ function App() {
               setLeaveAdjustments(result.adjustments)
             }}
             onNotify={notify}
+          />
+        )}
+        {activeNav === 'Audit log' && isAdmin && (
+          <AuditLogPage
+            events={auditEvents}
+            onOpen={() => {
+              void refreshAuditEvents()
+            }}
           />
         )}
         {activeNav === 'Employees' && isAdmin && (

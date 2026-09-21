@@ -6,6 +6,7 @@ import {
   HeartPulse,
   History,
   LayoutDashboard,
+  ListTree,
   Receipt,
   ScrollText,
   Settings,
@@ -431,6 +432,7 @@ export const adminNavItems = [
   { label: 'Payroll reports', icon: ScrollText },
   { label: 'VAT receipts', icon: Receipt },
   { label: 'Leave years', icon: History },
+  { label: 'Audit log', icon: ListTree },
   { label: 'Employees', icon: Users },
   { label: 'Policies', icon: BookOpen },
   { label: 'Settings', icon: Settings },
@@ -613,6 +615,7 @@ export function readPersistedState() {
     policies: stored.policies,
     leaveAdjustments: stored.leaveAdjustments ?? [],
     leaveYearClosures: stored.leaveYearClosures ?? [],
+    auditEvents: stored.auditEvents ?? [],
   }
 }
 

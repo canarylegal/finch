@@ -23,6 +23,7 @@ export type FinchRuntimeData = {
   policies: import('./domain').PolicyDocument[]
   leaveAdjustments: LeaveAdjustment[]
   leaveYearClosures: LeaveYearClosure[]
+  auditEvents: import('./auditLog').AuditEvent[]
 }
 
 export function emptyRuntimeData(): FinchRuntimeData {
@@ -42,5 +43,6 @@ export function emptyRuntimeData(): FinchRuntimeData {
     policies: [],
     leaveAdjustments: [],
     leaveYearClosures: [],
+    auditEvents: [],
   }
 }

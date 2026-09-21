@@ -190,7 +190,7 @@ export async function fetchAppData() {
 }
 
 export async function saveAppData(data: Record<string, unknown>) {
-  return api<{ ok: true }>('/api/app-data', {
+  return api<{ ok: true; auditEvents?: import('./auditLog').AuditEvent[] }>('/api/app-data', {
     method: 'PUT',
     body: JSON.stringify(data),
   })
