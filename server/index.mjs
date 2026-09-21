@@ -35,6 +35,17 @@ import {
   totpQrDataUrl,
   verifyTotpCode,
 } from './totp.mjs'
+import {
+  accountHasPasskey,
+  accountHasSecondFactor,
+  createAuthenticationOptions,
+  createRegistrationOptions,
+  publicPasskeyStatus,
+  removePasskey,
+  resolveWebAuthnConfig,
+  verifyAndStoreRegistration,
+  verifyAuthentication,
+} from './webauthn.mjs'
 
 dotenv.config()
 
@@ -92,6 +103,7 @@ function publicAccount(account) {
     jobTitle: account.jobTitle,
     isPrimary: Boolean(account.isPrimary),
     ...publicTotpStatus(account),
+    ...publicPasskeyStatus(account),
   }
 }
 
@@ -259,7 +271,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
 
   const policy = companyTwoFactorPolicy(store)
   const required = policyRequiresTwoFactor(policy, account.role)
-  const enabled = Boolean(account.totpEnabled && account.totpSecret)
+  const enabled = accountHasSecondFactor(account)
 
   if (required && enabled) {
     setPendingTwoFactorCookie(res, { kind: 'pending_2fa', accountId: account.id })
@@ -267,6 +279,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       requires2fa: true,
       challenge: 'account',
       account: publicAccount(account),
+      passkeysAvailable: accountHasPasskey(account),
+      totpAvailable: Boolean(account.totpEnabled && account.totpSecret),
     })
   }
 
@@ -501,6 +515,14 @@ app.post('/api/auth/2fa/disable', async (req, res) => {
     if (!codeOk) return res.status(401).json({ error: 'Invalid authentication code' })
   }
 
+  const policy = companyTwoFactorPolicy(store)
+  const stillHasPasskey = accountHasPasskey(account)
+  if (policyRequiresTwoFactor(policy, account.role) && !stillHasPasskey) {
+    return res.status(400).json({
+      error: 'Add a passkey first, or keep the authenticator — two-factor is required for your role.',
+    })
+  }
+
   account.totpEnabled = false
   account.totpSecret = null
   account.totpPendingSecret = null
@@ -515,10 +537,140 @@ app.get('/api/auth/2fa/status', async (req, res) => {
   const policy = companyTwoFactorPolicy(ctx.store)
   return res.json({
     ...publicTotpStatus(ctx.account),
+    ...publicPasskeyStatus(ctx.account),
+    secondFactorEnabled: accountHasSecondFactor(ctx.account),
     policy,
     required: policyRequiresTwoFactor(policy, ctx.account.role),
     pendingSetup: ctx.session.kind === 'pending_2fa_setup',
   })
+})
+
+app.post('/api/auth/webauthn/register/options', async (req, res) => {
+  const ctx = await requireAccountOrSetup(req, res)
+  if (!ctx) return
+  const config = resolveWebAuthnConfig({
+    req,
+    companyName: ctx.store.appData?.company?.name,
+  })
+  const options = await createRegistrationOptions({ account: ctx.account, config })
+  return res.json(options)
+})
+
+app.post('/api/auth/webauthn/register/verify', twoFactorLimiter, async (req, res) => {
+  const ctx = await requireAccountOrSetup(req, res)
+  if (!ctx) return
+  const { account, store, session } = ctx
+  const config = resolveWebAuthnConfig({
+    req,
+    companyName: store.appData?.company?.name,
+  })
+  const result = await verifyAndStoreRegistration({
+    account,
+    response: req.body?.credential || req.body,
+    config,
+    name: req.body?.name,
+  })
+  if (!result.ok) return res.status(400).json({ error: result.error })
+
+  let recoveryCodes = null
+  const hadRecovery = Array.isArray(account.totpRecoveryHashes) && account.totpRecoveryHashes.length > 0
+  if (!hadRecovery && !account.totpEnabled) {
+    const created = await createRecoveryCodes()
+    account.totpRecoveryHashes = created.hashes
+    recoveryCodes = created.codes
+  }
+
+  await writeStore(store)
+
+  if (session.kind === 'pending_2fa_setup') {
+    const token = signToken({ kind: 'account', accountId: account.id })
+    setSessionCookie(res, token)
+  }
+
+  return res.json({
+    account: publicAccount(account),
+    recoveryCodes,
+  })
+})
+
+app.post('/api/auth/webauthn/authenticate/options', twoFactorLimiter, async (req, res) => {
+  const session = readAuth(req)
+  if (!session || session.kind !== 'pending_2fa') {
+    return res.status(400).json({ error: 'No two-factor challenge in progress' })
+  }
+  const store = await readStore()
+  const account = store.accounts.find((item) => item.id === session.accountId)
+  if (!account || account.status !== 'Active') {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: 'Not signed in' })
+  }
+  const config = resolveWebAuthnConfig({
+    req,
+    companyName: store.appData?.company?.name,
+  })
+  const result = await createAuthenticationOptions({ account, config })
+  if (!result.ok) return res.status(400).json({ error: result.error })
+  return res.json(result.options)
+})
+
+app.post('/api/auth/webauthn/authenticate/verify', twoFactorLimiter, async (req, res) => {
+  const session = readAuth(req)
+  if (!session || session.kind !== 'pending_2fa') {
+    return res.status(400).json({ error: 'No two-factor challenge in progress' })
+  }
+  const store = await readStore()
+  const account = store.accounts.find((item) => item.id === session.accountId)
+  if (!account || account.status !== 'Active') {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: 'Not signed in' })
+  }
+  const config = resolveWebAuthnConfig({
+    req,
+    companyName: store.appData?.company?.name,
+  })
+  const result = await verifyAuthentication({
+    account,
+    response: req.body?.credential || req.body,
+    config,
+  })
+  if (!result.ok) return res.status(401).json({ error: result.error })
+  await writeStore(store)
+
+  const token = signToken({ kind: 'account', accountId: account.id })
+  setSessionCookie(res, token)
+  return res.json({ account: publicAccount(account) })
+})
+
+app.post('/api/auth/webauthn/credentials/remove', async (req, res) => {
+  const ctx = await requireAccount(req, res)
+  if (!ctx) return
+  const { account, store } = ctx
+  const credentialId = String(req.body?.id || '')
+  const password = String(req.body?.password || '')
+  if (!credentialId) return res.status(400).json({ error: 'Passkey id is required' })
+  if (!password) return res.status(400).json({ error: 'Password is required' })
+
+  const passwordOk = await bcrypt.compare(password, account.passwordHash)
+  if (!passwordOk) return res.status(401).json({ error: 'Password is incorrect' })
+
+  const existing = Array.isArray(account.webauthnCredentials) ? account.webauthnCredentials : []
+  if (!existing.some((item) => item.id === credentialId)) {
+    return res.status(404).json({ error: 'Passkey not found' })
+  }
+
+  const remainingPasskeys = existing.filter((item) => item.id !== credentialId)
+  const wouldHaveSecondFactor =
+    Boolean(account.totpEnabled && account.totpSecret) || remainingPasskeys.length > 0
+  const policy = companyTwoFactorPolicy(store)
+  if (policyRequiresTwoFactor(policy, account.role) && !wouldHaveSecondFactor) {
+    return res.status(400).json({
+      error: 'Cannot remove the last second factor while two-factor is required for your role.',
+    })
+  }
+
+  removePasskey(account, credentialId)
+  await writeStore(store)
+  return res.json({ account: publicAccount(account) })
 })
 
 app.get('/api/recovery/accounts', async (req, res) => {

@@ -39,6 +39,8 @@ export type PublicAccount = {
   isPrimary?: boolean
   totpEnabled?: boolean
   recoveryCodesRemaining?: number
+  passkeyCount?: number
+  passkeys?: { id: string; name: string; createdAt: string | null; backedUp: boolean }[]
 }
 
 export async function fetchBootstrap() {
@@ -60,6 +62,8 @@ export async function loginWithPassword(email: string, password: string) {
         account?: PublicAccount
         displayName?: string
         hasAccounts?: boolean
+        passkeysAvailable?: boolean
+        totpAvailable?: boolean
       }
     | { mustSetup2fa: true; account: PublicAccount }
   >('/api/auth/login', {
@@ -103,10 +107,51 @@ export async function fetchTwoFactorStatus() {
   return api<{
     totpEnabled: boolean
     recoveryCodesRemaining: number
+    passkeyCount: number
+    passkeys: { id: string; name: string; createdAt: string | null; backedUp: boolean }[]
+    secondFactorEnabled: boolean
     policy: 'all' | 'admins' | 'optional'
     required: boolean
     pendingSetup: boolean
   }>('/api/auth/2fa/status')
+}
+
+export async function webauthnRegisterOptions() {
+  return api<Record<string, unknown>>('/api/auth/webauthn/register/options', {
+    method: 'POST',
+    body: '{}',
+  })
+}
+
+export async function webauthnRegisterVerify(credential: unknown, name?: string) {
+  return api<{ account: PublicAccount; recoveryCodes: string[] | null }>(
+    '/api/auth/webauthn/register/verify',
+    {
+      method: 'POST',
+      body: JSON.stringify({ credential, name }),
+    },
+  )
+}
+
+export async function webauthnAuthenticateOptions() {
+  return api<Record<string, unknown>>('/api/auth/webauthn/authenticate/options', {
+    method: 'POST',
+    body: '{}',
+  })
+}
+
+export async function webauthnAuthenticateVerify(credential: unknown) {
+  return api<{ account: PublicAccount }>('/api/auth/webauthn/authenticate/verify', {
+    method: 'POST',
+    body: JSON.stringify({ credential }),
+  })
+}
+
+export async function webauthnRemovePasskey(id: string, password: string) {
+  return api<{ account: PublicAccount }>('/api/auth/webauthn/credentials/remove', {
+    method: 'POST',
+    body: JSON.stringify({ id, password }),
+  })
 }
 
 export async function logoutRequest() {

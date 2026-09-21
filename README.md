@@ -101,9 +101,10 @@ Set `SMTP_HOST` and `SMTP_FROM` (plus auth if required). Notification preference
 - Session cookie: `httpOnly`, `SameSite=Lax`, `Secure` in production (`COOKIE_SECURE`)
 - `TRUST_PROXY=1` when behind Caddy/nginx so secure cookies and rate limits see the real client IP
 - Login rate limit: `LOGIN_RATE_LIMIT` (default 30 / 15 minutes)
-- **TOTP 2FA** for accounts (Settings → Security): org policy `all` / `admins` / `optional`, plus personal enrol/disable and recovery codes
+- **TOTP 2FA** and **passkeys** for accounts (Settings → Security): org policy `all` / `admins` / `optional`, authenticator enrol/disable, passkey add/remove, and recovery codes
 - Master recovery 2FA: set `MASTER_ADMIN_REQUIRE_2FA=true` and `MASTER_ADMIN_TOTP_SECRET` (base32)
 - Master recovery login is env-based (`MASTER_ADMIN_*`); keep it long and private
+- Optional WebAuthn overrides: `WEBAUTHN_RP_ID`, `WEBAUTHN_ORIGIN` (comma-separated origins)
 
 ## Scripts
 
@@ -126,11 +127,12 @@ Set `SMTP_HOST` and `SMTP_FROM` (plus auth if required). Notification preference
 After `docker compose up -d --build` on a VPS:
 
 1. Open `https://$FINCH_DOMAIN` and confirm HTTPS (Caddy).
-2. Master recovery login works; create/sign-in as admin with 2FA as required by policy.
-3. Submit a leave request as an employee → approve as admin → balances/calendar update.
-4. Submit an expense claim with a receipt → approve/reject.
-5. Admin → Payroll reports: download CSV for the current period.
-6. Admin → VAT receipts: upload one receipt, confirm VAT, export CSV.
-7. With SMTP set: trigger a notification and confirm delivery (or check server logs if skipped).
-8. Confirm a backup file appears under the data volume (`/app/data/backups` in the `backup` service).
-9. Optional: restore a dump into a spare database once before relying on backups.
+2. Master recovery login works; create/sign-in as admin with 2FA as required by policy (passkey or authenticator).
+3. Settings → Security: add a passkey, sign out, sign in with password + passkey.
+4. Submit a leave request as an employee → approve as admin → balances/calendar update.
+5. Submit an expense claim with a receipt → approve/reject.
+6. Admin → Payroll reports: download CSV for the current period.
+7. Admin → VAT receipts: upload one receipt, confirm VAT, export CSV.
+8. With SMTP set: trigger a notification and confirm delivery (or check server logs if skipped).
+9. Confirm a backup file appears under the data volume (`/app/data/backups` in the `backup` service).
+10. Optional: restore a dump into a spare database once before relying on backups.

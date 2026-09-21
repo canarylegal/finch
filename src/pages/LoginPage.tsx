@@ -1,4 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import {
+  browserSupportsWebAuthn,
+  startAuthentication,
+  startRegistration,
+} from '@simplewebauthn/browser'
 import { ChevronRight } from 'lucide-react'
 import { FinchMark } from '../components/FinchMark'
 import {
@@ -7,10 +12,14 @@ import {
   loginWithPassword,
   setupTwoFactor,
   verifyTwoFactorCode,
+  webauthnAuthenticateOptions,
+  webauthnAuthenticateVerify,
+  webauthnRegisterOptions,
+  webauthnRegisterVerify,
   type PublicAccount,
 } from '../api'
 
-type Step = 'credentials' | 'totp' | 'setup' | 'recoveryCodes'
+type Step = 'credentials' | 'totp' | 'setupChoice' | 'setup' | 'recoveryCodes'
 
 export function LoginPage({
   onSignedIn,
@@ -30,6 +39,8 @@ export function LoginPage({
   const [setupQr, setSetupQr] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([])
   const [pendingAccount, setPendingAccount] = useState<PublicAccount | null>(null)
+  const [passkeysAvailable, setPasskeysAvailable] = useState(false)
+  const passkeysSupported = browserSupportsWebAuthn()
 
   useEffect(() => {
     void (async () => {
@@ -37,6 +48,7 @@ export function LoginPage({
       if (!me.ok) return
       if (me.data.kind === 'pending_2fa') {
         setPendingAccount(me.data.account)
+        setPasskeysAvailable(Boolean(me.data.account.passkeyCount))
         setChallenge('account')
         setStep('totp')
         return
@@ -48,19 +60,7 @@ export function LoginPage({
       }
       if (me.data.kind === 'pending_2fa_setup') {
         setPendingAccount(me.data.account)
-        setBusy(true)
-        try {
-          const setup = await setupTwoFactor()
-          if (!setup.ok) {
-            setError(setup.error)
-            return
-          }
-          setSetupSecret(setup.data.secret)
-          setSetupQr(setup.data.qrDataUrl)
-          setStep('setup')
-        } finally {
-          setBusy(false)
-        }
+        setStep('setupChoice')
       }
     })()
   }, [])
@@ -69,7 +69,7 @@ export function LoginPage({
     onSignedIn(account)
   }
 
-  const startSetup = async () => {
+  const startTotpSetup = async () => {
     const setup = await setupTwoFactor()
     if (!setup.ok) {
       setError(setup.error)
@@ -94,13 +94,13 @@ export function LoginPage({
       if ('requires2fa' in result.data && result.data.requires2fa) {
         setChallenge(result.data.challenge)
         if (result.data.account) setPendingAccount(result.data.account)
+        setPasskeysAvailable(Boolean(result.data.passkeysAvailable))
         setStep('totp')
         return
       }
       if ('mustSetup2fa' in result.data && result.data.mustSetup2fa) {
         setPendingAccount(result.data.account)
-        const ok = await startSetup()
-        if (!ok) return
+        setStep('setupChoice')
         return
       }
       if ('recovery' in result.data && result.data.recovery) {
@@ -132,6 +132,60 @@ export function LoginPage({
       if ('account' in result.data && result.data.account) {
         finishAccount(result.data.account)
       }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handlePasskeySignIn = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      const options = await webauthnAuthenticateOptions()
+      if (!options.ok) {
+        setError(options.error)
+        return
+      }
+      const credential = await startAuthentication({ optionsJSON: options.data as never })
+      const result = await webauthnAuthenticateVerify(credential)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      finishAccount(result.data.account)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Passkey sign-in was cancelled'
+      setError(message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handlePasskeySetup = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      const options = await webauthnRegisterOptions()
+      if (!options.ok) {
+        setError(options.error)
+        return
+      }
+      const credential = await startRegistration({ optionsJSON: options.data as never })
+      const result = await webauthnRegisterVerify(credential, 'Login passkey')
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      if (result.data.recoveryCodes?.length) {
+        setRecoveryCodes(result.data.recoveryCodes)
+        setPendingAccount(result.data.account)
+        setStep('recoveryCodes')
+        return
+      }
+      finishAccount(result.data.account)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Passkey setup was cancelled'
+      setError(message)
     } finally {
       setBusy(false)
     }
@@ -203,12 +257,24 @@ export function LoginPage({
 
         {step === 'totp' && (
           <>
-            <h1>Authenticator code</h1>
+            <h1>Verify it’s you</h1>
             <p className="login-lede">
               {challenge === 'master'
                 ? 'Enter the code from the master recovery authenticator.'
-                : 'Enter the 6-digit code from your authenticator app, or a recovery code.'}
+                : 'Use a passkey, authenticator code, or recovery code to continue.'}
             </p>
+            {challenge === 'account' && passkeysAvailable && passkeysSupported && (
+              <div className="login-form" style={{ marginBottom: 12 }}>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={busy}
+                  onClick={() => void handlePasskeySignIn()}
+                >
+                  {busy ? 'Waiting for passkey…' : 'Continue with passkey'}
+                </button>
+              </div>
+            )}
             <form className="login-form" onSubmit={handleTotp}>
               <label>
                 Authentication code
@@ -224,7 +290,7 @@ export function LoginPage({
               </label>
               {error && <p className="login-error">{error}</p>}
               <button type="submit" className="button button-primary" disabled={busy}>
-                {busy ? 'Verifying…' : 'Continue'}
+                {busy ? 'Verifying…' : 'Continue with code'}
                 <ChevronRight size={15} />
               </button>
               <button
@@ -242,14 +308,42 @@ export function LoginPage({
           </>
         )}
 
-        {step === 'setup' && (
+        {step === 'setupChoice' && (
           <>
             <h1>Set up 2FA</h1>
             <p className="login-lede">
               Your organisation requires two-factor authentication
-              {pendingAccount?.role === 'admin' ? ' for admins' : ''}. Scan the QR code, then enter
-              a code to confirm.
+              {pendingAccount?.role === 'admin' ? ' for admins' : ''}. Choose a passkey or an
+              authenticator app.
             </p>
+            {error && <p className="login-error">{error}</p>}
+            <div className="login-form">
+              {passkeysSupported && (
+                <button
+                  type="button"
+                  className="button button-primary"
+                  disabled={busy}
+                  onClick={() => void handlePasskeySetup()}
+                >
+                  {busy ? 'Waiting for passkey…' : 'Use a passkey'}
+                </button>
+              )}
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => void startTotpSetup()}
+              >
+                Use authenticator app
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 'setup' && (
+          <>
+            <h1>Set up authenticator</h1>
+            <p className="login-lede">Scan the QR code, then enter a code to confirm.</p>
             {setupQr && (
               <img className="totp-qr" src={setupQr} alt="Authenticator QR code" width={220} height={220} />
             )}
@@ -274,6 +368,18 @@ export function LoginPage({
                 {busy ? 'Confirming…' : 'Confirm and continue'}
                 <ChevronRight size={15} />
               </button>
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => {
+                  setStep('setupChoice')
+                  setCode('')
+                  setError('')
+                }}
+              >
+                Back
+              </button>
             </form>
           </>
         )}
@@ -283,7 +389,7 @@ export function LoginPage({
             <h1>Save recovery codes</h1>
             <p className="login-lede">
               Store these codes somewhere safe. Each can be used once if you lose your
-              authenticator.
+              authenticator or passkey.
             </p>
             <ul className="totp-recovery-list">
               {recoveryCodes.map((item) => (

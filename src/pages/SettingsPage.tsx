@@ -27,8 +27,15 @@ import {
   fetchNotificationStatus,
   fetchTwoFactorStatus,
   setupTwoFactor,
+  webauthnRegisterOptions,
+  webauthnRegisterVerify,
+  webauthnRemovePasskey,
   type PublicAccount,
 } from '../api'
+import {
+  browserSupportsWebAuthn,
+  startRegistration,
+} from '@simplewebauthn/browser'
 import {
   PAYROLL_DISCLAIMER,
   bankHolidaysForRegion,
@@ -834,8 +841,8 @@ export function SettingsPage({
                   ))}
                 </div>
                 <p className="field-helper">
-                  People covered by the policy must enrol before they can use Finch. Optional mode
-                  lets anyone turn 2FA on for their own account.
+                  People covered by the policy must enrol a passkey or authenticator before they can
+                  use Finch. Optional mode lets anyone turn 2FA on for their own account.
                 </p>
               </div>
               <div className="settings-divider" />
@@ -1138,9 +1145,12 @@ function TwoFactorAccountPanel({
   const [status, setStatus] = useState<{
     totpEnabled: boolean
     recoveryCodesRemaining: number
+    passkeyCount: number
+    passkeys: { id: string; name: string; createdAt: string | null; backedUp: boolean }[]
+    secondFactorEnabled: boolean
     required: boolean
   } | null>(null)
-  const [mode, setMode] = useState<'idle' | 'setup' | 'disable' | 'codes'>('idle')
+  const [mode, setMode] = useState<'idle' | 'setup' | 'disable' | 'codes' | 'removePasskey'>('idle')
   const [secret, setSecret] = useState('')
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [code, setCode] = useState('')
@@ -1148,6 +1158,8 @@ function TwoFactorAccountPanel({
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [passkeyToRemove, setPasskeyToRemove] = useState<string | null>(null)
+  const passkeysSupported = browserSupportsWebAuthn()
 
   const refresh = async () => {
     const result = await fetchTwoFactorStatus()
@@ -1155,6 +1167,9 @@ function TwoFactorAccountPanel({
       setStatus({
         totpEnabled: result.data.totpEnabled,
         recoveryCodesRemaining: result.data.recoveryCodesRemaining,
+        passkeyCount: result.data.passkeyCount,
+        passkeys: result.data.passkeys,
+        secondFactorEnabled: result.data.secondFactorEnabled,
         required: result.data.required,
       })
     }
@@ -1201,6 +1216,38 @@ function TwoFactorAccountPanel({
     }
   }
 
+  const addPasskey = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      const options = await webauthnRegisterOptions()
+      if (!options.ok) {
+        setError(options.error)
+        return
+      }
+      const credential = await startRegistration({ optionsJSON: options.data as never })
+      const result = await webauthnRegisterVerify(credential, 'Passkey')
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      onAccountUpdated(result.data.account)
+      if (result.data.recoveryCodes?.length) {
+        setRecoveryCodes(result.data.recoveryCodes)
+        setMode('codes')
+      } else {
+        setMode('idle')
+      }
+      await refresh()
+      onNotify('Passkey added')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Passkey setup was cancelled'
+      setError(message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const disable = async () => {
     setError('')
     setBusy(true)
@@ -1221,45 +1268,151 @@ function TwoFactorAccountPanel({
     }
   }
 
+  const removeSelectedPasskey = async () => {
+    if (!passkeyToRemove) return
+    setError('')
+    setBusy(true)
+    try {
+      const result = await webauthnRemovePasskey(passkeyToRemove, password)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      onAccountUpdated(result.data.account)
+      setMode('idle')
+      setPassword('')
+      setPasskeyToRemove(null)
+      await refresh()
+      onNotify('Passkey removed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const canDisableAuthenticator =
+    status &&
+    status.totpEnabled &&
+    !(status.required && status.passkeyCount === 0)
+
   return (
     <div className="settings-section settings-section-stack">
       <div>
-        <h2>Your authenticator</h2>
-        <p>Use an app such as Google Authenticator or 1Password for sign-in codes.</p>
+        <h2>Your second factor</h2>
+        <p>Use a passkey and/or an authenticator app for sign-in after your password.</p>
       </div>
       {status && (
         <p className="field-helper">
-          {status.totpEnabled
-            ? `Enabled · ${status.recoveryCodesRemaining} recovery code${status.recoveryCodesRemaining === 1 ? '' : 's'} left`
+          {status.secondFactorEnabled
+            ? [
+                status.passkeyCount
+                  ? `${status.passkeyCount} passkey${status.passkeyCount === 1 ? '' : 's'}`
+                  : null,
+                status.totpEnabled ? 'authenticator on' : null,
+                status.totpEnabled
+                  ? `${status.recoveryCodesRemaining} recovery code${status.recoveryCodesRemaining === 1 ? '' : 's'} left`
+                  : status.passkeyCount
+                    ? `${status.recoveryCodesRemaining} recovery code${status.recoveryCodesRemaining === 1 ? '' : 's'} left`
+                    : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')
             : status.required
-              ? 'Required for your role — enable it below.'
+              ? 'Required for your role — add a passkey or authenticator below.'
               : 'Not enabled on this account.'}
         </p>
       )}
 
       {mode === 'idle' && (
-        <div className="account-admin-actions">
-          {!status?.totpEnabled ? (
-            <button type="button" className="button button-secondary" disabled={busy} onClick={() => void beginSetup()}>
-              Enable authenticator
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="button button-secondary"
-              disabled={busy || Boolean(status?.required)}
-              title={status?.required ? 'Required by organisation policy' : undefined}
-              onClick={() => {
-                setMode('disable')
-                setError('')
-                setCode('')
-                setPassword('')
-              }}
-            >
-              Disable authenticator
-            </button>
-          )}
-        </div>
+        <>
+          <div>
+            <h3 className="settings-subheading">Passkeys</h3>
+            {status?.passkeys?.length ? (
+              <ul className="passkey-list">
+                {status.passkeys.map((item) => (
+                  <li key={item.id} className="passkey-row">
+                    <div>
+                      <strong>{item.name}</strong>
+                      <span>
+                        {item.createdAt
+                          ? `Added ${new Date(item.createdAt).toLocaleDateString('en-GB')}`
+                          : 'Added'}
+                        {item.backedUp ? ' · synced' : ''}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setPasskeyToRemove(item.id)
+                        setPassword('')
+                        setError('')
+                        setMode('removePasskey')
+                      }}
+                    >
+                      <Trash2 size={15} />
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="field-helper">No passkeys on this account yet.</p>
+            )}
+            {passkeysSupported ? (
+              <div className="account-admin-actions">
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={busy}
+                  onClick={() => void addPasskey()}
+                >
+                  Add passkey
+                </button>
+              </div>
+            ) : (
+              <p className="field-helper">This browser does not support passkeys.</p>
+            )}
+          </div>
+
+          <div className="settings-divider" />
+
+          <div>
+            <h3 className="settings-subheading">Authenticator app</h3>
+            <div className="account-admin-actions">
+              {!status?.totpEnabled ? (
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={busy}
+                  onClick={() => void beginSetup()}
+                >
+                  Enable authenticator
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={busy || !canDisableAuthenticator}
+                  title={
+                    !canDisableAuthenticator
+                      ? 'Required by organisation policy — add a passkey first'
+                      : undefined
+                  }
+                  onClick={() => {
+                    setMode('disable')
+                    setError('')
+                    setCode('')
+                    setPassword('')
+                  }}
+                >
+                  Disable authenticator
+                </button>
+              )}
+            </div>
+          </div>
+          {error && <p className="login-error">{error}</p>}
+        </>
       )}
 
       {mode === 'setup' && (
@@ -1322,6 +1475,43 @@ function TwoFactorAccountPanel({
             </button>
             <button type="button" className="button button-primary" disabled={busy} onClick={() => void disable()}>
               Disable
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'removePasskey' && (
+        <div className="totp-setup-panel">
+          <p className="field-helper">Confirm your password to remove this passkey.</p>
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          {error && <p className="login-error">{error}</p>}
+          <div className="account-admin-actions">
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => {
+                setMode('idle')
+                setPasskeyToRemove(null)
+                setPassword('')
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={busy}
+              onClick={() => void removeSelectedPasskey()}
+            >
+              Remove passkey
             </button>
           </div>
         </div>

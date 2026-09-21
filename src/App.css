@@ -211,6 +211,46 @@ button {
   max-width: 420px;
 }
 
+.passkey-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #edf1ee;
+  border-radius: 10px;
+  background: #fafbfa;
+}
+
+.passkey-row strong {
+  display: block;
+  color: #243832;
+  font-size: 13px;
+}
+
+.passkey-row span {
+  display: block;
+  margin-top: 2px;
+  color: #7a8b87;
+  font-size: 12px;
+}
+
+.settings-subheading {
+  margin: 0 0 8px;
+  color: #40565a;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .totp-setup-panel label {
   display: flex;
   flex-direction: column;
