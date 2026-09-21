@@ -16,6 +16,11 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
   const [email, setEmail] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
+  const [showAddAdmin, setShowAddAdmin] = useState(false)
+  const [justCreatedPrimary, setJustCreatedPrimary] = useState(false)
+
+  const primary = accounts.find((account) => account.isPrimary)
+  const hasAccounts = accounts.length > 0
 
   const refresh = async () => {
     const result = await recoveryListAccounts()
@@ -30,11 +35,17 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
     void refresh()
   }, [])
 
+  const signOut = async () => {
+    await logoutRequest()
+    onSignedOut()
+  }
+
   const createFirstOrNext = async (event: FormEvent) => {
     event.preventDefault()
     setError('')
     setMessage('')
     setBusy(true)
+    const creatingPrimary = accounts.length === 0
     try {
       const result = await recoveryCreateAccount({
         email,
@@ -49,11 +60,14 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
       setEmail('')
       setDisplayName('')
       setPassword('')
-      setMessage(
-        accounts.length === 0
-          ? 'Primary admin created. They can sign in and set up the organisation.'
-          : 'Admin account created.',
-      )
+      if (creatingPrimary) {
+        setJustCreatedPrimary(true)
+        setShowAddAdmin(false)
+        setMessage('')
+      } else {
+        setMessage('Admin account created.')
+        setShowAddAdmin(false)
+      }
       await refresh()
     } finally {
       setBusy(false)
@@ -78,11 +92,12 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
         <span className="eyebrow">Master recovery</span>
         <h1>Recovery console</h1>
         <p className="login-lede">
-          Create the first admin or manage accounts. Organisation setup is done by an admin after
-          sign-in.
+          {hasAccounts
+            ? 'Manage admin accounts, or sign out so the primary admin can set up the organisation.'
+            : 'Create the primary admin account. Organisation setup is done by that admin after they sign in.'}
         </p>
 
-        {accounts.length === 0 ? (
+        {!hasAccounts ? (
           <form className="login-form" onSubmit={createFirstOrNext}>
             <strong>Create primary admin</strong>
             <label>
@@ -113,7 +128,6 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
               />
             </label>
             {error && <p className="login-error">{error}</p>}
-            {message && <p className="field-helper">{message}</p>}
             <button type="submit" className="button button-primary" disabled={busy}>
               Create primary admin
               <ChevronRight size={15} />
@@ -121,6 +135,41 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
           </form>
         ) : (
           <>
+            {(justCreatedPrimary || primary) && (
+              <div className="recovery-next-step">
+                <strong>
+                  {justCreatedPrimary
+                    ? 'Primary admin created'
+                    : 'Primary admin is ready'}
+                </strong>
+                <p>
+                  {primary
+                    ? `${primary.displayName} (${primary.email}) can sign in and set up the organisation.`
+                    : 'An admin can sign in and set up the organisation.'}{' '}
+                  Creating further admins is optional.
+                </p>
+                <div className="recovery-next-actions">
+                  <button type="button" className="button button-primary" onClick={() => void signOut()}>
+                    Sign out of recovery
+                    <ChevronRight size={15} />
+                  </button>
+                  {!showAddAdmin && (
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() => {
+                        setShowAddAdmin(true)
+                        setError('')
+                        setMessage('')
+                      }}
+                    >
+                      Create another admin
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="recovery-account-list">
               {accounts.map((account) => (
                 <div className="account-admin-row" key={account.id}>
@@ -182,54 +231,71 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
                 </div>
               ))}
             </div>
-            <form className="login-form" onSubmit={createFirstOrNext}>
-              <strong>Add admin account</strong>
-              <label>
-                Email
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                Display name
-                <input
-                  value={displayName}
-                  onChange={(event) => setDisplayName(event.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                Password
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  minLength={10}
-                  required
-                />
-              </label>
-              {error && <p className="login-error">{error}</p>}
-              {message && <p className="field-helper">{message}</p>}
-              <button type="submit" className="button button-primary" disabled={busy}>
-                Create admin
-              </button>
-            </form>
+
+            {showAddAdmin && (
+              <form className="login-form" onSubmit={createFirstOrNext}>
+                <strong>Create another admin</strong>
+                <p className="field-helper">Optional — only needed if you want a second admin before sign-out.</p>
+                <label>
+                  Email
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Display name
+                  <input
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Password
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    minLength={10}
+                    required
+                  />
+                </label>
+                {error && <p className="login-error">{error}</p>}
+                {message && <p className="field-helper">{message}</p>}
+                <div className="recovery-next-actions">
+                  <button type="submit" className="button button-primary" disabled={busy}>
+                    Create admin
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() => {
+                      setShowAddAdmin(false)
+                      setEmail('')
+                      setDisplayName('')
+                      setPassword('')
+                      setError('')
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {message && !showAddAdmin && <p className="field-helper">{message}</p>}
+            {error && !showAddAdmin && <p className="login-error">{error}</p>}
           </>
         )}
 
-        <button
-          type="button"
-          className="button button-secondary"
-          onClick={async () => {
-            await logoutRequest()
-            onSignedOut()
-          }}
-        >
-          Sign out of recovery
-        </button>
+        {!hasAccounts && (
+          <button type="button" className="button button-secondary" onClick={() => void signOut()}>
+            Sign out of recovery
+          </button>
+        )}
       </div>
     </div>
   )

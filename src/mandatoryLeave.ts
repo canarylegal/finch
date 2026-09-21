@@ -1,7 +1,14 @@
-import { APP_TODAY, type CompanySettings, type Employee, type LeaveRequest } from './domain'
+import { appToday, type CompanySettings, type Employee, type LeaveRequest } from './domain'
 import { buildLeaveRequestFields } from './leaveRequestHelpers'
 import type { LeaveYearPeriod } from './leaveYear'
-import { countWorkingDaysInRange, parseIsoDate, toIsoDate, type AbsenceRecord } from './payroll'
+import {
+  countWorkingDaysInRange,
+  parseIsoDate,
+  splitRangeExcludingDates,
+  toIsoDate,
+  type AbsenceRecord,
+  type BankHoliday,
+} from './payroll'
 
 export type MandatoryLeaveRange = {
   id: number
@@ -73,6 +80,26 @@ export function formatMandatoryRangeLabel(range: MandatoryLeaveRange) {
   return `${start} – ${end}`
 }
 
+/** Bank holidays that fall inside any mandatory leave range (inclusive). */
+export function bankHolidaysOverlappingMandatoryRanges(
+  ranges: MandatoryLeaveRange[],
+  bankHolidays: BankHoliday[],
+): BankHoliday[] {
+  const hits: BankHoliday[] = []
+  const seen = new Set<string>()
+  for (const holiday of bankHolidays) {
+    for (const range of ranges) {
+      if (!range.start || !range.end || range.start > range.end) continue
+      if (holiday.date < range.start || holiday.date > range.end) continue
+      if (seen.has(holiday.date)) break
+      seen.add(holiday.date)
+      hits.push(holiday)
+      break
+    }
+  }
+  return hits.sort((a, b) => a.date.localeCompare(b.date))
+}
+
 export function upsertMandatoryConfirmation(
   confirmations: MandatoryLeaveConfirmation[],
   next: MandatoryLeaveConfirmation,
@@ -87,8 +114,11 @@ export function isMandatoryLeaveRequest(request: LeaveRequest, yearKey?: string)
   return request.mandatoryYearKey === yearKey
 }
 
-export function mandatoryBookingNote(range: MandatoryLeaveRange) {
-  return `Mandatory leave · ${formatMandatoryRangeLabel(range)}`
+export function mandatoryBookingNote(range: MandatoryLeaveRange, skippedHolidays?: BankHoliday[]) {
+  const base = `Mandatory leave · ${formatMandatoryRangeLabel(range)}`
+  if (!skippedHolidays?.length) return base
+  const names = skippedHolidays.map((holiday) => holiday.name).join(', ')
+  return `${base} (skipped bank holiday${skippedHolidays.length === 1 ? '' : 's'}: ${names})`
 }
 
 type BookingBuildArgs = {
@@ -97,11 +127,13 @@ type BookingBuildArgs = {
   existingRequests: LeaveRequest[]
   existingAbsences: AbsenceRecord[]
   recordedBy: string
+  bankHolidays?: BankHoliday[]
 }
 
 /**
  * Cancel prior mandatory bookings for this leave year, then create approved
  * leave + absences for each active employee and date range (if they have working days).
+ * Bank holidays inside a range are skipped (split into contiguous segments).
  */
 export function applyMandatoryLeaveBookings({
   employees,
@@ -109,9 +141,10 @@ export function applyMandatoryLeaveBookings({
   existingRequests,
   existingAbsences,
   recordedBy,
+  bankHolidays = [],
 }: BookingBuildArgs): { requests: LeaveRequest[]; absences: AbsenceRecord[] } {
   const yearKey = confirmation.leaveYearKey
-  const recordedAt = toIsoDate(APP_TODAY)
+  const recordedAt = toIsoDate(appToday())
 
   let nextAbsenceId = Math.max(0, ...existingAbsences.map((item) => item.id)) + 1
   let nextRequestId = Math.max(0, ...existingRequests.map((item) => item.id)) + 1
@@ -146,48 +179,61 @@ export function applyMandatoryLeaveBookings({
   }
 
   const activeEmployees = employees.filter((employee) => employee.status === 'Active')
+  const holidayDates = new Set(bankHolidays.map((holiday) => holiday.date))
 
   for (const range of confirmation.ranges) {
     if (!range.start || !range.end || range.start > range.end) continue
-    const note = mandatoryBookingNote(range)
+    const skippedInRange = bankHolidays.filter(
+      (holiday) => holiday.date >= range.start && holiday.date <= range.end,
+    )
+    const note = mandatoryBookingNote(range, skippedInRange)
+    const segments = splitRangeExcludingDates(range.start, range.end, holidayDates)
+    if (segments.length === 0) continue
 
     for (const employee of activeEmployees) {
-      const days = countWorkingDaysInRange(range.start, range.end, employee.workingDays)
-      if (days <= 0) continue
+      for (const segment of segments) {
+        const days = countWorkingDaysInRange(
+          segment.start,
+          segment.end,
+          employee.workingDays,
+          holidayDates,
+        )
+        if (days <= 0) continue
 
-      const absenceId = nextAbsenceId
-      nextAbsenceId += 1
-      absences = [
-        ...absences,
-        {
-          id: absenceId,
+        const absenceId = nextAbsenceId
+        nextAbsenceId += 1
+        absences = [
+          ...absences,
+          {
+            id: absenceId,
+            employeeId: employee.id,
+            type: 'annual_leave',
+            start: segment.start,
+            end: segment.end,
+            amount: days,
+            note,
+            recordedBy,
+            recordedAt,
+            origin: 'request',
+          },
+        ]
+
+        const requestId = nextRequestId
+        nextRequestId += 1
+        requests.push({
+          id: requestId,
           employeeId: employee.id,
-          type: 'annual_leave',
-          start: range.start,
-          end: range.end,
-          amount: days,
-          note,
-          recordedBy,
-          recordedAt,
-          origin: 'request',
-        },
-      ]
-
-      const requestId = nextRequestId
-      nextRequestId += 1
-      requests.push({
-        id: requestId,
-        employeeId: employee.id,
-        name: employee.name,
-        initials: employee.initials,
-        color: employee.color,
-        ...buildLeaveRequestFields(range.start, range.end, days, note),
-        status: 'Approved',
-        leaveType: 'annual',
-        absenceId,
-        source: 'mandatory',
-        mandatoryYearKey: yearKey,
-      })
+          name: employee.name,
+          initials: employee.initials,
+          color: employee.color,
+          ...buildLeaveRequestFields(segment.start, segment.end, days, note),
+          status: 'Approved',
+          leaveType: 'annual',
+          absenceId,
+          source: 'mandatory',
+          mandatoryYearKey: yearKey,
+        })
+      }
     }
   }
 

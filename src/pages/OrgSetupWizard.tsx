@@ -41,6 +41,7 @@ export function OrgSetupWizard({
       leaveYearStart,
       leaveYearEnd,
       leaveYearConfigured: true,
+      leaveYearConfiguredAt: company.leaveYearConfiguredAt ?? new Date().toISOString().slice(0, 10),
     })
   }
 

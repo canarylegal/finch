@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { CalendarDays, Check, ChevronRight, Clock3, Pencil, X } from 'lucide-react'
 import { PortalMessageThread } from '../components/PortalMessageThread'
 import {
-  APP_TODAY,
+  appToday,
   companyEntitlementSettings,
   type CompanySettings,
   type Employee,
@@ -54,6 +54,7 @@ type LeaveRequestDetailModalProps = {
   onUpdateRequest: (status: RequestStatus) => void
   onResolveAmendment: (approved: boolean) => void
   onCancelApproved?: () => void
+  canReview?: boolean
 }
 
 export function LeaveRequestDetailModal({
@@ -74,13 +75,14 @@ export function LeaveRequestDetailModal({
   onUpdateRequest,
   onResolveAmendment,
   onCancelApproved,
+  canReview = true,
 }: LeaveRequestDetailModalProps) {
   const [isEditing, setIsEditing] = useState(false)
   const defaults = {
-    start: request.start ?? toIsoDate(APP_TODAY),
+    start: request.start ?? toIsoDate(appToday()),
     end:
       request.end ??
-      toIsoDate(new Date(APP_TODAY.getFullYear(), APP_TODAY.getMonth(), APP_TODAY.getDate() + 1)),
+      toIsoDate(new Date(appToday().getFullYear(), appToday().getMonth(), appToday().getDate() + 1)),
   }
   const [startDate, setStartDate] = useState(defaults.start)
   const [endDate, setEndDate] = useState(defaults.end)
@@ -208,22 +210,28 @@ export function LeaveRequestDetailModal({
               </div>
               {viewer === 'admin' && (
                 <div className="amendment-actions">
-                  <button
-                    type="button"
-                    className="approve-button"
-                    onClick={() => onResolveAmendment(true)}
-                  >
-                    <Check size={14} />
-                    Approve change
-                  </button>
-                  <button
-                    type="button"
-                    className="decline-button"
-                    onClick={() => onResolveAmendment(false)}
-                  >
-                    <X size={14} />
-                    Decline
-                  </button>
+                  {canReview ? (
+                    <>
+                      <button
+                        type="button"
+                        className="approve-button"
+                        onClick={() => onResolveAmendment(true)}
+                      >
+                        <Check size={14} />
+                        Approve change
+                      </button>
+                      <button
+                        type="button"
+                        className="decline-button"
+                        onClick={() => onResolveAmendment(false)}
+                      >
+                        <X size={14} />
+                        Decline
+                      </button>
+                    </>
+                  ) : (
+                    <span className="field-helper">Needs another admin</span>
+                  )}
                 </div>
               )}
             </div>
@@ -328,14 +336,22 @@ export function LeaveRequestDetailModal({
 
           {viewer === 'admin' && request.status === 'Pending' && (
             <div className="leave-request-admin-actions">
-              <button type="button" className="approve-button" onClick={() => onUpdateRequest('Approved')}>
-                <Check size={15} />
-                Approve leave
-              </button>
-              <button type="button" className="decline-button" onClick={() => onUpdateRequest('Declined')}>
-                <X size={15} />
-                Decline
-              </button>
+              {canReview ? (
+                <>
+                  <button type="button" className="approve-button" onClick={() => onUpdateRequest('Approved')}>
+                    <Check size={15} />
+                    Approve leave
+                  </button>
+                  <button type="button" className="decline-button" onClick={() => onUpdateRequest('Declined')}>
+                    <X size={15} />
+                    Decline
+                  </button>
+                </>
+              ) : (
+                <p className="field-helper">
+                  You can’t approve or decline your own request. Ask another admin to review it.
+                </p>
+              )}
             </div>
           )}
 

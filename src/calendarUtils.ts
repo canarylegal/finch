@@ -17,6 +17,16 @@ export function formatMonthYear(date: Date) {
   return `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`
 }
 
+/** e.g. Sunday, 20 September 2026 */
+export function formatLongWeekdayDate(date: Date) {
+  return date.toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
 export function toIsoDate(date: Date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')

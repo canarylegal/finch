@@ -17,6 +17,7 @@ type ExpenseClaimDetailModalProps = {
   viewer: 'employee' | 'admin'
   onClose: () => void
   onReview?: (status: ExpenseReviewStatus, reviewNote?: string) => void
+  canReview?: boolean
 }
 
 export function ExpenseClaimDetailModal({
@@ -24,6 +25,7 @@ export function ExpenseClaimDetailModal({
   viewer,
   onClose,
   onReview,
+  canReview = true,
 }: ExpenseClaimDetailModalProps) {
   const [reviewNote, setReviewNote] = useState('')
   const [error, setError] = useState('')
@@ -124,29 +126,37 @@ export function ExpenseClaimDetailModal({
 
           {viewer === 'admin' && claim.status === 'Pending' && onReview && (
             <>
-              <label>
-                Note if declining
-                <textarea
-                  rows={2}
-                  value={reviewNote}
-                  onChange={(event) => {
-                    setReviewNote(event.target.value)
-                    setError('')
-                  }}
-                  placeholder="Shown to the employee"
-                />
-              </label>
-              {error && <p className="field-error">{error}</p>}
-              <div className="modal-footer">
-                <button type="button" className="decline-button" onClick={handleDecline}>
-                  <X size={15} />
-                  Decline
-                </button>
-                <button type="button" className="approve-button" onClick={() => onReview('Approved')}>
-                  <Check size={15} />
-                  Approve
-                </button>
-              </div>
+              {canReview ? (
+                <>
+                  <label>
+                    Note if declining
+                    <textarea
+                      rows={2}
+                      value={reviewNote}
+                      onChange={(event) => {
+                        setReviewNote(event.target.value)
+                        setError('')
+                      }}
+                      placeholder="Shown to the employee"
+                    />
+                  </label>
+                  {error && <p className="field-error">{error}</p>}
+                  <div className="modal-footer">
+                    <button type="button" className="decline-button" onClick={handleDecline}>
+                      <X size={15} />
+                      Decline
+                    </button>
+                    <button type="button" className="approve-button" onClick={() => onReview('Approved')}>
+                      <Check size={15} />
+                      Approve
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="field-helper">
+                  You can’t approve or decline your own claim. Ask another admin to review it.
+                </p>
+              )}
             </>
           )}
         </div>

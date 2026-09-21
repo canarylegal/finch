@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { FileText, Plus, Trash2, Upload, X } from 'lucide-react'
 import { toIsoDate } from '../calendarUtils'
-import { APP_TODAY, type ExpenseCategory, type ExpenseReceipt } from '../domain'
+import { appToday, type ExpenseCategory, type ExpenseReceipt } from '../domain'
 import { estimateDataUrlSize, formatFileSize } from '../employeeDocuments'
 import {
   ACCEPTED_RECEIPT_ACCEPT,
@@ -27,7 +27,7 @@ type ExpenseClaimModalProps = {
 
 export function ExpenseClaimModal({ onClose, onSubmit }: ExpenseClaimModalProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [date, setDate] = useState(toIsoDate(APP_TODAY))
+  const [date, setDate] = useState(toIsoDate(appToday()))
   const [amount, setAmount] = useState('')
   const [merchant, setMerchant] = useState('')
   const [category, setCategory] = useState<ExpenseCategory>('travel')

@@ -16,7 +16,19 @@ import {
 import { toIsoDate, type AbsenceRecord, type BankHoliday } from './payroll'
 
 /** Prompt admins this many days before leave year end (inclusive). */
-export const LEAVE_YEAR_CLOSE_PROMPT_DAYS = 130
+export const LEAVE_YEAR_CLOSE_PROMPT_DAYS = 30
+
+/**
+ * Persist a go-live date the first time leave is configured, so we never ask
+ * admins to close leave years that pre-date the organisation in Finch.
+ */
+export function withLeaveYearConfiguredAt(
+  company: CompanySettings,
+  currentPeriod: LeaveYearPeriod,
+): CompanySettings {
+  if (!company.leaveYearConfigured || company.leaveYearConfiguredAt) return company
+  return { ...company, leaveYearConfiguredAt: currentPeriod.start }
+}
 
 export type LeaveYearCloseEmployeeLine = {
   employeeId: number
@@ -52,7 +64,9 @@ export function closureForLeaveYear(closures: LeaveYearClosure[], leaveYearKey: 
 }
 
 /**
- * Prefer an unclosed previous year that has already ended; otherwise the current
+ * Prefer an unclosed previous year that has already ended — but only if that
+ * year ran after leave was configured in Finch. Years that ended before the
+ * organisation’s leave go-live date are never prompted. Otherwise the current
  * year when it is overdue or within the close prompt window.
  */
 export function periodNeedingClose(
@@ -63,12 +77,20 @@ export function periodNeedingClose(
 ): LeaveYearPeriod | null {
   if (!company.leaveYearConfigured) return null
 
+  const companyWithAt = withLeaveYearConfiguredAt(company, currentPeriod)
+  // ISO date (or period start) from when leave was first set up in the app.
+  const configuredFrom = companyWithAt.leaveYearConfiguredAt ?? currentPeriod.start
+
   const previous = previousLeaveYearPeriod(
     currentPeriod,
     company.leaveYearStart,
     company.leaveYearEnd,
   )
-  if (!isLeaveYearClosed(closures, previous.start) && isPastLeaveYearEnd(today, previous.end)) {
+  if (
+    previous.end >= configuredFrom &&
+    !isLeaveYearClosed(closures, previous.start) &&
+    isPastLeaveYearEnd(today, previous.end)
+  ) {
     return previous
   }
 

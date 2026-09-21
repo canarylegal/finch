@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
   Check,
@@ -11,7 +11,7 @@ import { MoreMenu } from './components/MoreMenu'
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher'
 import { toIsoDate } from './calendarUtils'
 import {
-  APP_TODAY,
+  appToday,
   AVATAR_COLORS,
   adminNavItems,
   companyEntitlementSettings,
@@ -29,6 +29,7 @@ import {
 import { emptyRuntimeData } from './emptyState'
 import {
   createAccountRequest,
+  emailPayrollReportRequest,
   fetchAppData,
   fetchMe,
   logoutRequest,
@@ -68,10 +69,7 @@ import {
   nextEmployeeDocumentId,
 } from './employeeDocuments'
 import {
-  expenseReviewedNotification,
-  expenseSubmittedNotification,
-  leaveReviewedNotification,
-  leaveSubmittedNotification,
+  dispatchNotificationEmail,
   shouldNotify,
 } from './notificationDelivery'
 import { AdminDashboard, EmployeeDashboard } from './pages/Dashboards'
@@ -80,18 +78,26 @@ import { AdminRequests } from './pages/AdminRequestsPage'
 import { Documents } from './pages/DocumentsPage'
 import { Employees } from './pages/EmployeesPage'
 import { ExpensesPage } from './pages/ExpensesPage'
+import { VatReceiptsPage } from './pages/VatReceiptsPage'
 import { LeaveYearsPage } from './pages/LeaveYearsPage'
 import { MyLeavePage } from './pages/MyLeavePage'
 import {
   needsLeaveYearClosePrompt,
+  withLeaveYearConfiguredAt,
   type LeaveYearClosure,
 } from './leaveYearClose'
 import { Policies } from './pages/PoliciesPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TeamCalendar } from './pages/TeamCalendarPage'
 import {
+  bankHolidaysForRegion,
+  buildPayrollReport,
   countWorkingDaysInRange,
+  dueAutoPayrollPeriod,
   formatDisplayDate,
+  formatPayPeriodLabel,
+  payrollReportToCsv,
+  payrollReportToEmailBody,
   type AbsenceRecord,
   type BankHoliday,
 } from './payroll'
@@ -100,6 +106,7 @@ import {
   nextExpenseClaimId,
   pendingExpenseCount,
 } from './expenses'
+import type { VatReceipt } from './vatReceipts'
 import {
   LEAVE_NOT_CONFIGURED_EMPLOYEE_MESSAGE,
   applyMandatoryLeaveBookings,
@@ -126,6 +133,11 @@ import {
   nextLeaveAdjustmentId,
   type LeaveAdjustment,
 } from './leaveAdjustments'
+import { ensureEmployeesForAccounts } from './accountEmployees'
+import {
+  OWN_REQUEST_REVIEW_BLOCKED_MESSAGE,
+  canAdminReviewSubject,
+} from './approvalPolicy'
 import { findLeaveConflicts, overlapWarningMessage } from './leaveOverlap'
 import './App.css'
 
@@ -143,6 +155,7 @@ function App() {
   const [employeeDocuments, setEmployeeDocuments] = useState(empty.employeeDocuments)
   const [documentFolders, setDocumentFolders] = useState(empty.documentFolders)
   const [expenseClaims, setExpenseClaims] = useState(empty.expenseClaims)
+  const [vatReceipts, setVatReceipts] = useState<VatReceipt[]>(empty.vatReceipts)
   const [taskDismissals, setTaskDismissals] = useState<TaskDismissal[]>(empty.taskDismissals)
   const [policies, setPolicies] = useState(empty.policies)
   const [leaveAdjustments, setLeaveAdjustments] = useState<LeaveAdjustment[]>(
@@ -168,30 +181,53 @@ function App() {
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [adminWorkspaceView, setAdminWorkspaceView] = useState<'admin' | 'employee'>('admin')
 
   const applyAppData = (data: Record<string, unknown>) => {
     const fallback = emptyRuntimeData()
-    setAccounts(Array.isArray(data.accounts) ? (data.accounts as Account[]) : fallback.accounts)
-    setEmployees(Array.isArray(data.employees) ? (data.employees as typeof employees) : fallback.employees)
+    const rawAccounts = Array.isArray(data.accounts)
+      ? (data.accounts as Account[])
+      : fallback.accounts
+    const rawEmployees = Array.isArray(data.employees)
+      ? (data.employees as Employee[])
+      : fallback.employees
+    const rawFolders = Array.isArray(data.documentFolders)
+      ? (data.documentFolders as typeof documentFolders)
+      : fallback.documentFolders
     setAbsences(Array.isArray(data.absences) ? (data.absences as AbsenceRecord[]) : fallback.absences)
-    setCompany(
+    const nextCompany =
       data.company && typeof data.company === 'object'
         ? { ...fallback.company, ...(data.company as CompanySettings) }
-        : fallback.company,
+        : fallback.company
+    const leavePeriod = getLeaveYearPeriod(
+      appToday(),
+      nextCompany.leaveYearStart,
+      nextCompany.leaveYearEnd,
     )
+    const companyWithAt = withLeaveYearConfiguredAt(nextCompany, leavePeriod)
+    setCompany(companyWithAt)
+    const ensured = ensureEmployeesForAccounts({
+      accounts: rawAccounts,
+      employees: rawEmployees,
+      company: companyWithAt,
+      documentFolders: rawFolders,
+    })
+    setAccounts(ensured.accounts)
+    setEmployees(ensured.employees)
+    setDocumentFolders(ensured.documentFolders)
+    const storedHolidays = Array.isArray(data.bankHolidays)
+      ? (data.bankHolidays as BankHoliday[])
+      : []
     setBankHolidays(
-      Array.isArray(data.bankHolidays) ? (data.bankHolidays as BankHoliday[]) : fallback.bankHolidays,
+      storedHolidays.length > 0
+        ? storedHolidays
+        : bankHolidaysForRegion(nextCompany.bankHolidayRegion),
     )
     setRequests(Array.isArray(data.requests) ? (data.requests as typeof requests) : fallback.requests)
     setPortalMessages(
       Array.isArray(data.portalMessages)
         ? (data.portalMessages as typeof portalMessages)
         : fallback.portalMessages,
-    )
-    setDocumentFolders(
-      Array.isArray(data.documentFolders)
-        ? (data.documentFolders as typeof documentFolders)
-        : fallback.documentFolders,
     )
     setEmployeeDocuments(
       Array.isArray(data.employeeDocuments)
@@ -202,6 +238,11 @@ function App() {
       Array.isArray(data.expenseClaims)
         ? (data.expenseClaims as typeof expenseClaims)
         : fallback.expenseClaims,
+    )
+    setVatReceipts(
+      Array.isArray(data.vatReceipts)
+        ? (data.vatReceipts as VatReceipt[])
+        : fallback.vatReceipts,
     )
     setTaskDismissals(
       Array.isArray(data.taskDismissals)
@@ -219,6 +260,7 @@ function App() {
         ? (data.leaveYearClosures as LeaveYearClosure[])
         : fallback.leaveYearClosures,
     )
+    return ensured
   }
 
   const loadAppDataForSession = async (account: Account) => {
@@ -230,8 +272,15 @@ function App() {
       window.setTimeout(() => setToast(''), 2800)
       return false
     }
-    applyAppData(result.data)
-    setSessionAccount(account)
+    const ensured = applyAppData(result.data)
+    for (const accountId of ensured.changedAccountIds) {
+      const linked = ensured.accounts.find((item) => item.id === accountId)
+      if (!linked?.employeeId) continue
+      await updateAccountRequest(accountId, { employeeId: linked.employeeId })
+    }
+    const session =
+      ensured.accounts.find((item) => item.id === account.id) ?? account
+    setSessionAccount(session)
     setActiveNav('Overview')
     setBootState('ready')
     return true
@@ -239,6 +288,7 @@ function App() {
 
   const persistAppData = async (overrides: {
     expenseClaims?: typeof expenseClaims
+    vatReceipts?: VatReceipt[]
     taskDismissals?: TaskDismissal[]
     policies?: typeof policies
     leaveAdjustments?: LeaveAdjustment[]
@@ -257,6 +307,7 @@ function App() {
       employeeDocuments,
       accounts: overrides.accounts ?? accounts,
       expenseClaims: overrides.expenseClaims ?? expenseClaims,
+      vatReceipts: overrides.vatReceipts ?? vatReceipts,
       taskDismissals: overrides.taskDismissals ?? taskDismissals,
       policies: overrides.policies ?? policies,
       leaveAdjustments: overrides.leaveAdjustments ?? leaveAdjustments,
@@ -271,6 +322,15 @@ function App() {
     void (async () => {
       const me = await fetchMe()
       if (!me.ok) {
+        setBootState('login')
+        return
+      }
+      if (
+        me.data.kind === 'pending_2fa' ||
+        me.data.kind === 'pending_2fa_setup' ||
+        me.data.kind === 'pending_2fa_master'
+      ) {
+        // Incomplete login challenge — finish on the login screen.
         setBootState('login')
         return
       }
@@ -300,26 +360,78 @@ function App() {
     employeeDocuments,
     accounts,
     expenseClaims,
+    vatReceipts,
     taskDismissals,
     policies,
     leaveAdjustments,
     leaveYearClosures,
   ])
 
-  const isAdmin = sessionAccount?.role === 'admin'
+  const autoPayrollAttemptedRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (bootState !== 'ready') return
+    if (sessionAccount?.role !== 'admin') return
+    const due = dueAutoPayrollPeriod(company, appToday())
+    if (!due) return
+    if (autoPayrollAttemptedRef.current === due.end) return
+    autoPayrollAttemptedRef.current = due.end
+
+    void (async () => {
+      const rows = buildPayrollReport({
+        employees,
+        absences,
+        bankHolidays,
+        periodStart: due.start,
+        periodEnd: due.end,
+      })
+      const periodLabel = formatPayPeriodLabel(due.start, due.end)
+      const result = await emailPayrollReportRequest({
+        to: company.payrollEmail,
+        subject: `Finch payroll report — ${periodLabel}`,
+        csv: payrollReportToCsv(rows),
+        filename: `finch-payroll-${due.start}.csv`,
+        text: payrollReportToEmailBody(rows, {
+          companyName: company.name,
+          periodLabel,
+        }),
+      })
+      if (!result.ok) {
+        notify(result.error)
+        return
+      }
+      setCompany((current) => ({
+        ...current,
+        lastAutoPayrollSentPeriodEnd: due.end,
+      }))
+      notify(`Automated payroll report emailed to ${result.data.to}`)
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per due period when admin session is ready
+  }, [bootState, sessionAccount?.role, company.autoSendPayrollReport, company.payrollEmail, company.lastAutoPayrollSentPeriodEnd])
+
+  const isAdminRole = sessionAccount?.role === 'admin'
+  const isAdmin = Boolean(isAdminRole && adminWorkspaceView === 'admin')
   const actorDisplayName = sessionAccount?.displayName ?? 'Unknown'
   const currentEmployee =
     sessionAccount?.employeeId != null
       ? employees.find((item) => item.id === sessionAccount.employeeId)
       : undefined
+  const canReviewEmployee = (subjectEmployeeId: number | null | undefined) => {
+    if (!sessionAccount || sessionAccount.role !== 'admin') return false
+    return canAdminReviewSubject({
+      actor: sessionAccount,
+      subjectEmployeeId,
+      company,
+    })
+  }
   const pendingCount =
     requests.filter((request) => request.status === 'Pending').length +
     pendingExpenseCount(expenseClaims)
   const leaveYear = useMemo(
-    () => getLeaveYearPeriod(APP_TODAY, company.leaveYearStart, company.leaveYearEnd),
+    () => getLeaveYearPeriod(appToday(), company.leaveYearStart, company.leaveYearEnd),
     [company.leaveYearStart, company.leaveYearEnd],
   )
-  const todayIso = toIsoDate(APP_TODAY)
+  const todayIso = toIsoDate(appToday())
   const upcomingTasks = useMemo(
     () => buildProbationTasks(employees, taskDismissals, todayIso),
     [employees, taskDismissals, todayIso],
@@ -330,11 +442,31 @@ function App() {
     window.setTimeout(() => setToast(''), 2800)
   }
 
+  const switchWorkspaceView = () => {
+    if (!isAdminRole) return
+    if (adminWorkspaceView === 'admin') {
+      if (!currentEmployee) {
+        notify('Your employee profile is still being set up — try again in a moment')
+        return
+      }
+      setAdminWorkspaceView('employee')
+      setActiveNav('Overview')
+      setMobileNavOpen(false)
+      notify('Switched to employee view')
+      return
+    }
+    setAdminWorkspaceView('admin')
+    setActiveNav('Overview')
+    setMobileNavOpen(false)
+    notify('Switched to admin view')
+  }
+
   const signOut = async () => {
     await logoutRequest()
     setSessionAccount(null)
     setBootState('login')
     setActiveNav('Overview')
+    setAdminWorkspaceView('admin')
     setMobileNavOpen(false)
     notify('Signed out')
   }
@@ -352,10 +484,11 @@ function App() {
   }
 
   const openSettings = (tab: SettingsTab = 'company') => {
-    if (!isAdmin) {
+    if (!isAdminRole) {
       notify('Only admins can open settings')
       return
     }
+    setAdminWorkspaceView('admin')
     setSettingsTab(tab)
     setActiveNav('Settings')
     setMobileNavOpen(false)
@@ -367,7 +500,7 @@ function App() {
       {
         ...record,
         id: Math.max(0, ...current.map((item) => item.id)) + 1,
-        recordedAt: toIsoDate(APP_TODAY),
+        recordedAt: toIsoDate(appToday()),
       },
     ])
   }
@@ -426,6 +559,16 @@ function App() {
       },
     ])
     notify('Document uploaded')
+    if (shouldNotify(company, 'documentUpdated')) {
+      const employee = employees.find((item) => item.id === folder.employeeId)
+      void dispatchNotificationEmail('documentUpdated', {
+        employeeId: folder.employeeId,
+        details: {
+          employeeName: employee?.name || 'Employee',
+          documentTitle: payload.title,
+        },
+      }).then((message) => notify(message))
+    }
   }
 
   const deleteEmployeeDocument = (documentId: number) => {
@@ -497,6 +640,10 @@ function App() {
     const request = requests.find((item) => item.id === id)
     const employee = employeeForRequest(id)
     if (!request?.pendingAmendment || !employee) return
+    if (!canReviewEmployee(employee.id)) {
+      notify(OWN_REQUEST_REVIEW_BLOCKED_MESSAGE)
+      return
+    }
 
     if (!approved) {
       setRequests((current) =>
@@ -541,7 +688,7 @@ function App() {
       }
     }
 
-    const recordedAt = toIsoDate(APP_TODAY)
+    const recordedAt = toIsoDate(appToday())
     let nextAbsenceId = request.absenceId
 
     if (request.absenceId != null) {
@@ -617,6 +764,15 @@ function App() {
       employees.find((item) => item.id === request?.employeeId) ??
       employees.find((item) => item.name === request?.name)
 
+    if (
+      (status === 'Approved' || status === 'Declined') &&
+      request &&
+      !canReviewEmployee(request.employeeId)
+    ) {
+      notify(OWN_REQUEST_REVIEW_BLOCKED_MESSAGE)
+      return
+    }
+
     if (status === 'Approved' && request && employee && isAnnualLeaveRequest(request)) {
       const days =
         request.start && request.end
@@ -643,8 +799,8 @@ function App() {
 
     if (status === 'Approved' && request && employee) {
       const days = parseDurationDays(request.duration)
-      const start = request.start ?? toIsoDate(APP_TODAY)
-      const end = request.end ?? request.start ?? toIsoDate(APP_TODAY)
+      const start = request.start ?? toIsoDate(appToday())
+      const end = request.end ?? request.start ?? toIsoDate(appToday())
       const leaveType = absenceTypeForLeaveRequest(request.leaveType)
       const existingOrphan = absences.find(
         (item) =>
@@ -671,7 +827,7 @@ function App() {
             note: request.note || 'Approved leave request',
             recordedBy: actorDisplayName,
             id: newAbsenceId,
-            recordedAt: toIsoDate(APP_TODAY),
+            recordedAt: toIsoDate(appToday()),
             origin: 'request',
           },
         ])
@@ -720,7 +876,14 @@ function App() {
       (status === 'Approved' || status === 'Declined') &&
       shouldNotify(company, 'leaveRequestReviewed')
     ) {
-      notify(leaveReviewedNotification(request.name, status, request.dates))
+      void dispatchNotificationEmail('leaveRequestReviewed', {
+        employeeId: request.employeeId,
+        details: {
+          employeeName: request.name,
+          dates: request.dates,
+          status,
+        },
+      }).then((message) => notify(message))
     }
   }
 
@@ -783,6 +946,7 @@ function App() {
         existingRequests: requests,
         existingAbsences: absences,
         recordedBy: actorDisplayName,
+        bankHolidays,
       })
       setRequests(booked.requests)
       setAbsences(booked.absences)
@@ -882,9 +1046,15 @@ function App() {
       },
     ])
     setIsLeaveModalOpen(false)
-    notify('Leave request sent to Alex')
+    notify('Leave request submitted')
     if (shouldNotify(company, 'leaveRequestSubmitted')) {
-      notify(leaveSubmittedNotification(employee.name, dates))
+      void dispatchNotificationEmail('leaveRequestSubmitted', {
+        employeeId: employee.id,
+        details: {
+          employeeName: employee.name,
+          dates,
+        },
+      }).then((message) => notify(message))
     }
   }
 
@@ -920,9 +1090,15 @@ function App() {
 
     setExpenseClaims(nextClaims)
     setIsExpenseModalOpen(false)
-    notify('Expense claim sent to Alex')
+    notify('Expense claim submitted')
     if (shouldNotify(company, 'expenseClaimSubmitted')) {
-      notify(expenseSubmittedNotification(employee.name, formatGbp(payload.amount)))
+      void dispatchNotificationEmail('expenseClaimSubmitted', {
+        employeeId: employee.id,
+        details: {
+          employeeName: employee.name,
+          amountLabel: formatGbp(payload.amount),
+        },
+      }).then((message) => notify(message))
     }
     return true
   }
@@ -930,6 +1106,10 @@ function App() {
   const reviewExpenseClaim = (id: number, status: 'Approved' | 'Declined', reviewNote?: string) => {
     const claim = expenseClaims.find((item) => item.id === id)
     if (!claim) return
+    if (!canReviewEmployee(claim.employeeId)) {
+      notify(OWN_REQUEST_REVIEW_BLOCKED_MESSAGE)
+      return
+    }
 
     const nextClaims = expenseClaims.map((item) =>
       item.id === id
@@ -946,7 +1126,14 @@ function App() {
     setActiveExpenseClaimId(null)
     notify(status === 'Approved' ? 'Expense claim approved' : 'Expense claim declined')
     if (shouldNotify(company, 'expenseClaimReviewed')) {
-      notify(expenseReviewedNotification(claim.name, status, formatGbp(claim.amount)))
+      void dispatchNotificationEmail('expenseClaimReviewed', {
+        employeeId: claim.employeeId,
+        details: {
+          employeeName: claim.name,
+          amountLabel: formatGbp(claim.amount),
+          status,
+        },
+      }).then((message) => notify(message))
     }
   }
 
@@ -1143,7 +1330,7 @@ function App() {
         amount: days,
         note: payload.leaveType || 'Admin-added leave',
         recordedBy: actorDisplayName,
-        recordedAt: toIsoDate(APP_TODAY),
+        recordedAt: toIsoDate(appToday()),
         origin: 'request',
       },
     ])
@@ -1197,7 +1384,7 @@ function App() {
         {
           ...record,
           id: absenceId,
-          recordedAt: toIsoDate(APP_TODAY),
+          recordedAt: toIsoDate(appToday()),
           origin: 'manual',
         },
       ])
@@ -1241,7 +1428,7 @@ function App() {
         reason: payload.reason,
         effectiveDate: payload.effectiveDate,
         recordedBy: actorDisplayName,
-        recordedAt: toIsoDate(APP_TODAY),
+        recordedAt: toIsoDate(appToday()),
       },
     ])
     setAdjustmentEmployee(null)
@@ -1294,8 +1481,22 @@ function App() {
         <OrgSetupWizard
           company={company}
           onComplete={(next) => {
-            setCompany(next)
-            void persistAppData({ company: next })
+            const period = getLeaveYearPeriod(
+              appToday(),
+              next.leaveYearStart,
+              next.leaveYearEnd,
+            )
+            const configured = withLeaveYearConfiguredAt(
+              {
+                ...next,
+                leaveYearConfigured: true,
+                leaveYearConfiguredAt:
+                  next.leaveYearConfiguredAt ?? toIsoDate(appToday()),
+              },
+              period,
+            )
+            setCompany(configured)
+            void persistAppData({ company: configured })
             notify('Organisation configured')
           }}
         />
@@ -1342,7 +1543,7 @@ function App() {
           companyName={company.name}
           companyAvatar={companyInitials(company.name)}
           logoUrl={company.logoUrl}
-          isAdmin={isAdmin}
+          isAdmin={isAdminRole}
           onOpenSettings={() => openSettings('company')}
           onNotify={notify}
         />
@@ -1438,16 +1639,36 @@ function App() {
               <Bell size={18} />
               <span className="notification-dot" />
             </button>
-            <div className={`role-switch ${isAdmin ? 'admin-mode' : ''}`} aria-label="Signed-in role">
+            <button
+              type="button"
+              className={`role-switch ${isAdmin ? 'admin-mode' : ''}`}
+              aria-label={
+                isAdminRole
+                  ? isAdmin
+                    ? 'Switch to employee view'
+                    : 'Switch to admin view'
+                  : 'Signed-in role'
+              }
+              disabled={!isAdminRole}
+              onClick={switchWorkspaceView}
+              title={
+                isAdminRole
+                  ? isAdmin
+                    ? 'Switch to employee view'
+                    : 'Switch to admin view'
+                  : undefined
+              }
+            >
               <span className="role-indicator" />
               {isAdmin ? 'Admin' : 'Employee'}
-            </div>
+            </button>
           </div>
         </header>
 
         {activeNav === 'Overview' &&
           (isAdmin ? (
             <AdminDashboard
+              greetingName={sessionAccount.displayName}
               requests={requests}
               expenseClaims={expenseClaims}
               employees={employees}
@@ -1471,10 +1692,11 @@ function App() {
                 company,
                 leaveYear,
                 leaveYearClosures,
-                APP_TODAY,
+                appToday(),
               )}
               onAddEmployee={() => setIsAddEmployeeOpen(true)}
               onNavigate={handleNavigation}
+              canReviewEmployee={canReviewEmployee}
             />
           ) : (
             <EmployeeDashboard
@@ -1507,6 +1729,7 @@ function App() {
             onOpenExpense={setActiveExpenseClaimId}
             onApproveExpense={(id) => reviewExpenseClaim(id, 'Approved')}
             onCancelApproved={cancelApprovedLeave}
+            canReviewEmployee={canReviewEmployee}
           />
         )}
         {activeNav === 'Absences' && isAdmin && (
@@ -1537,6 +1760,15 @@ function App() {
             bankHolidays={bankHolidays}
             payrollEmail={company.payrollEmail}
             payPeriodStartDay={company.payPeriodStartDay}
+            companyName={company.name}
+            onNotify={notify}
+          />
+        )}
+        {activeNav === 'VAT receipts' && isAdmin && (
+          <VatReceiptsPage
+            receipts={vatReceipts}
+            uploadedBy={actorDisplayName}
+            onChange={setVatReceipts}
             onNotify={notify}
           />
         )}
@@ -1550,7 +1782,7 @@ function App() {
             adjustments={leaveAdjustments}
             closures={leaveYearClosures}
             leaveYear={leaveYear}
-            today={APP_TODAY}
+            today={appToday()}
             closedByName={actorDisplayName}
             onConfirmClose={(result) => {
               setLeaveYearClosures(result.closures)
@@ -1641,12 +1873,19 @@ function App() {
             leaveYear={leaveYear}
             initialTab={settingsTab}
             accounts={accounts}
-            employees={employees}
             currentAccountId={sessionAccount.id}
             onSave={saveCompanySettings}
             onBankHolidaysChange={setBankHolidays}
             onNotify={notify}
             onOpenLeaveYears={() => handleNavigation('Leave years')}
+            onSessionAccountUpdated={(account) => {
+              setSessionAccount((current) =>
+                current && current.id === account.id ? { ...current, ...account } : current,
+              )
+              setAccounts((current) =>
+                current.map((item) => (item.id === account.id ? { ...item, ...account } : item)),
+              )
+            }}
             onUpdateAccount={(account) => {
               void (async () => {
                 const previous = accounts.find((item) => item.id === account.id)
@@ -1676,16 +1915,27 @@ function App() {
                   notify(result.error)
                   return
                 }
-                if (result.data.accounts) {
-                  setAccounts(result.data.accounts)
-                } else {
-                  setAccounts((current) =>
-                    current.map((item) =>
+                const nextAccounts = result.data.accounts
+                  ? result.data.accounts
+                  : accounts.map((item) =>
                       item.id === result.data.account.id ? result.data.account : item,
-                    ),
-                  )
+                    )
+                const ensured = ensureEmployeesForAccounts({
+                  accounts: nextAccounts,
+                  employees,
+                  company,
+                  documentFolders,
+                })
+                for (const accountId of ensured.changedAccountIds) {
+                  const linked = ensured.accounts.find((item) => item.id === accountId)
+                  if (!linked?.employeeId) continue
+                  await updateAccountRequest(accountId, { employeeId: linked.employeeId })
                 }
-                const updated = result.data.account
+                setAccounts(ensured.accounts)
+                setEmployees(ensured.employees)
+                setDocumentFolders(ensured.documentFolders)
+                const updated =
+                  ensured.accounts.find((item) => item.id === account.id) ?? result.data.account
                 if (updated.id === sessionAccount.id) {
                   if (updated.status === 'Inactive') {
                     void signOut()
@@ -1694,6 +1944,7 @@ function App() {
                   setSessionAccount(updated)
                   if (updated.role !== 'admin' && activeNav === 'Settings') {
                     setActiveNav('Overview')
+                    setAdminWorkspaceView('admin')
                   }
                 }
                 notify(`${updated.displayName} updated`)
@@ -1711,12 +1962,37 @@ function App() {
                 email,
                 displayName: payload.displayName.trim(),
                 role: payload.role,
-                employeeId: payload.employeeId,
+                employeeId: null,
                 password: payload.password,
                 jobTitle: payload.jobTitle,
               })
               if (!result.ok) return result.error
-              setAccounts((current) => [...current, result.data.account])
+
+              const ensured = ensureEmployeesForAccounts({
+                accounts: [...accounts, result.data.account],
+                employees,
+                company,
+                documentFolders,
+              })
+              const created = ensured.accounts.find((item) => item.id === result.data.account.id)
+              if (created?.employeeId) {
+                const linked = await updateAccountRequest(created.id, {
+                  employeeId: created.employeeId,
+                })
+                if (linked.ok) {
+                  setAccounts(
+                    ensured.accounts.map((item) =>
+                      item.id === linked.data.account.id ? linked.data.account : item,
+                    ),
+                  )
+                } else {
+                  setAccounts(ensured.accounts)
+                }
+              } else {
+                setAccounts(ensured.accounts)
+              }
+              setEmployees(ensured.employees)
+              setDocumentFolders(ensured.documentFolders)
               notify(`Account created for ${result.data.account.displayName}`)
               return null
             }}
@@ -1753,6 +2029,7 @@ function App() {
       {isRecordAbsenceOpen && (
         <RecordAbsenceModal
           employees={employees.filter((employee) => employee.status === 'Active')}
+          recordedBy={actorDisplayName}
           onClose={() => setIsRecordAbsenceOpen(false)}
           onSubmit={recordAbsence}
         />
@@ -1828,6 +2105,7 @@ function App() {
                   }
                 : undefined
             }
+            canReview={canReviewEmployee(request.employeeId)}
           />
         )
       })()}
@@ -1844,6 +2122,7 @@ function App() {
                 ? (status, reviewNote) => reviewExpenseClaim(claim.id, status, reviewNote)
                 : undefined
             }
+            canReview={canReviewEmployee(claim.employeeId)}
           />
         )
       })()}

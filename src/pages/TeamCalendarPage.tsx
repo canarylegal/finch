@@ -3,7 +3,7 @@ import { ChevronRight, Plus } from 'lucide-react'
 import { PageHeader } from '../components/PageHeader'
 import { formatMonthYear } from '../components/MiniMonthCalendar'
 import { buildMonthGrid, dateInRange, toIsoDate } from '../calendarUtils'
-import { APP_TODAY, type Employee } from '../domain'
+import { appToday, type Employee } from '../domain'
 import {
   ABSENCE_TYPE_LABELS,
   absenceTypeColor,
@@ -28,9 +28,9 @@ export function TeamCalendar({
   onViewList,
 }: TeamCalendarProps) {
   const [viewDate, setViewDate] = useState(
-    () => new Date(APP_TODAY.getFullYear(), APP_TODAY.getMonth(), 1),
+    () => new Date(appToday().getFullYear(), appToday().getMonth(), 1),
   )
-  const today = APP_TODAY
+  const today = appToday()
   const cells = useMemo(() => buildMonthGrid(viewDate), [viewDate])
   const bankHolidayByDate = useMemo(() => {
     const map = new Map<string, BankHoliday>()

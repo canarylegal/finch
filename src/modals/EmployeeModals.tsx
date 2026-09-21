@@ -4,7 +4,7 @@ import { EntitlementBasisNote } from '../components/EntitlementBasisNote'
 import { WorkingDaysPicker } from '../components/WorkingDaysPicker'
 import { toIsoDate } from '../calendarUtils'
 import {
-  APP_TODAY,
+  appToday,
   companyEntitlementSettings,
   companyInitials,
   type CompanySettings,
@@ -281,9 +281,9 @@ export function AddEmployeeModal({
 }) {
   const [name, setName] = useState('')
   const [role, setRole] = useState('')
-  const [startDate, setStartDate] = useState(toIsoDate(APP_TODAY))
+  const [startDate, setStartDate] = useState(toIsoDate(appToday()))
   const [probationEndDate, setProbationEndDate] = useState(
-    defaultProbationEndDate(toIsoDate(APP_TODAY)),
+    defaultProbationEndDate(toIsoDate(appToday())),
   )
   const [entitlement, setEntitlement] = useState(company.defaultEntitlement)
   const [entitlementUnit, setEntitlementUnit] = useState(company.defaultEntitlementUnit)

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { CalendarDays, ChevronRight, X } from 'lucide-react'
 import { toIsoDate } from '../calendarUtils'
 import {
-  APP_TODAY,
+  appToday,
   companyEntitlementSettings,
   type CompanySettings,
   type Employee,
@@ -19,7 +19,7 @@ import {
   type BankHoliday,
 } from '../payroll'
 
-function defaultLeaveDates(today = APP_TODAY) {
+function defaultLeaveDates(today = appToday()) {
   const start = toIsoDate(today)
   const end = toIsoDate(
     new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1),
@@ -268,7 +268,7 @@ export function LeaveModal({
           <label>
             Note <span className="optional">(optional)</span>
             <textarea
-              placeholder="Add a note for Alex..."
+              placeholder="Add a note for your manager..."
               rows={3}
               value={note}
               onChange={(event) => setNote(event.target.value)}

@@ -12,9 +12,17 @@ import {
 } from 'lucide-react'
 import { MoreMenu } from '../components/MoreMenu'
 import { PageHeader } from '../components/PageHeader'
-import { formatMonthYear, MiniMonthCalendar } from '../components/MiniMonthCalendar'
+import { MiniMonthCalendar } from '../components/MiniMonthCalendar'
+import { formatLongWeekdayDate, formatMonthYear, toIsoDate } from '../calendarUtils'
+
+function dayGreeting(now = new Date()) {
+  const hour = now.getHours()
+  if (hour < 12) return 'Good morning'
+  if (hour < 18) return 'Good afternoon'
+  return 'Good evening'
+}
 import {
-  APP_TODAY,
+  appToday,
   companyEntitlementSettings,
   type CompanySettings,
   type Employee,
@@ -48,7 +56,6 @@ import { leaveRequestTypeLabel, isAnnualLeaveRequest } from '../leaveTypes'
 import { formatPolicyUpdatedAt, sortedPolicies } from '../policies'
 import { PolicyViewerModal } from '../modals/PolicyViewerModal'
 import { formatDisplayDate, parseIsoDate, type AbsenceRecord, type BankHoliday } from '../payroll'
-import { toIsoDate } from '../calendarUtils'
 
 type EmployeeDashboardProps = {
   employee?: Employee
@@ -100,6 +107,7 @@ export function EmployeeDashboard({
     }
     onRequestLeave()
   }
+  const today = appToday()
   const totalEntitlement = employee ? totalLeaveAllowance(employee, entitlementSettings, bankHolidays) : 0
   const pendingCount = employee
     ? requests.filter((request) => request.employeeId === employee.id && request.status === 'Pending')
@@ -107,8 +115,8 @@ export function EmployeeDashboard({
     : 0
   const percentRemaining =
     totalEntitlement > 0 ? Math.round((remaining / totalEntitlement) * 100) : 0
-  const daysUntilReset = daysUntilLeaveYearEnd(APP_TODAY, leaveYear.end)
-  const upcomingLeave = employee ? upcomingApprovedLeave(employee.id, absences, APP_TODAY) : []
+  const daysUntilReset = daysUntilLeaveYearEnd(today, leaveYear.end)
+  const upcomingLeave = employee ? upcomingApprovedLeave(employee.id, absences, today) : []
   const employeeRequestRows = employee ? employeeRequestsSorted(requests, employee.id).slice(0, 3) : []
   const leaveYearEnd = leaveYearResetItem(leaveYear)
   const lastPending = employee
@@ -120,8 +128,8 @@ export function EmployeeDashboard({
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Monday, 31 August 2026"
-        title={`Good morning, ${employee?.name.split(' ')[0] ?? 'there'}`}
+        eyebrow={formatLongWeekdayDate(today)}
+        title={`${dayGreeting()}, ${employee?.name.split(' ')[0] ?? 'there'}`}
         description="Here’s a quick look at your time away and company updates."
         action={
           <button type="button" className="button button-primary" onClick={requestLeave}>
@@ -384,6 +392,7 @@ export function EmployeeDashboard({
 }
 
 type AdminDashboardProps = {
+  greetingName: string
   requests: LeaveRequest[]
   expenseClaims: ExpenseClaim[]
   employees: Employee[]
@@ -406,9 +415,11 @@ type AdminDashboardProps = {
   needsLeaveYearClose: boolean
   onAddEmployee: () => void
   onNavigate: (nav: string) => void
+  canReviewEmployee?: (employeeId: number) => boolean
 }
 
 export function AdminDashboard({
+  greetingName,
   requests,
   expenseClaims,
   employees,
@@ -431,19 +442,21 @@ export function AdminDashboard({
   needsLeaveYearClose,
   onAddEmployee,
   onNavigate,
+  canReviewEmployee = () => true,
 }: AdminDashboardProps) {
+  const today = appToday()
   const pendingRequests = requests.filter((request) => request.status === 'Pending')
   const pendingExpenses = expenseClaims.filter((claim) => claim.status === 'Pending')
   const entitlementSettings = companyEntitlementSettings(company)
-  const calendarDate = APP_TODAY
+  const calendarDate = today
   const needsLeaveYear = !company.leaveYearConfigured
   const needsMandatory = needsMandatoryLeavePrompt(company, leaveYear)
-  const daysUntilClose = daysUntilLeaveYearEnd(APP_TODAY, leaveYear.end)
+  const daysUntilClose = daysUntilLeaveYearEnd(today, leaveYear.end)
   const activeEmployeeCount = employees.filter((employee) => employee.status === 'Active').length
   const weekStart = new Date(
-    APP_TODAY.getFullYear(),
-    APP_TODAY.getMonth(),
-    APP_TODAY.getDate() - ((APP_TODAY.getDay() + 6) % 7),
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - ((today.getDay() + 6) % 7),
   )
   const weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6)
   const weekStartIso = toIsoDate(weekStart)
@@ -462,8 +475,8 @@ export function AdminDashboard({
   return (
     <div className="page admin-page">
       <PageHeader
-        eyebrow="Monday, 31 August 2026"
-        title="Good morning, Alex"
+        eyebrow={formatLongWeekdayDate(today)}
+        title={`${dayGreeting()}, ${greetingName.split(' ')[0] || 'there'}`}
         description="Here’s what needs your attention today."
         action={
           <button
@@ -636,22 +649,28 @@ export function AdminDashboard({
                   </strong>
                 </div>
                 <div className="request-actions">
-                  <button
-                    type="button"
-                    className="approve-button"
-                    onClick={() => onUpdateRequest(request.id, 'Approved')}
-                  >
-                    <Check size={15} />
-                    Approve
-                  </button>
-                  <button
-                    type="button"
-                    className="decline-button"
-                    onClick={() => onUpdateRequest(request.id, 'Declined')}
-                  >
-                    <X size={15} />
-                    Decline
-                  </button>
+                  {canReviewEmployee(request.employeeId) ? (
+                    <>
+                      <button
+                        type="button"
+                        className="approve-button"
+                        onClick={() => onUpdateRequest(request.id, 'Approved')}
+                      >
+                        <Check size={15} />
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        className="decline-button"
+                        onClick={() => onUpdateRequest(request.id, 'Declined')}
+                      >
+                        <X size={15} />
+                        Decline
+                      </button>
+                    </>
+                  ) : (
+                    <span className="field-helper">Needs another admin</span>
+                  )}
                 </div>
               </div>
               )
@@ -669,22 +688,28 @@ export function AdminDashboard({
                   </small>
                 </div>
                 <div className="request-actions">
-                  <button
-                    type="button"
-                    className="approve-button"
-                    onClick={() => onApproveExpense(claim.id)}
-                  >
-                    <Check size={15} />
-                    Approve
-                  </button>
-                  <button
-                    type="button"
-                    className="decline-button"
-                    onClick={() => onOpenExpense(claim.id)}
-                  >
-                    <X size={15} />
-                    Review
-                  </button>
+                  {canReviewEmployee(claim.employeeId) ? (
+                    <>
+                      <button
+                        type="button"
+                        className="approve-button"
+                        onClick={() => onApproveExpense(claim.id)}
+                      >
+                        <Check size={15} />
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        className="decline-button"
+                        onClick={() => onOpenExpense(claim.id)}
+                      >
+                        <X size={15} />
+                        Review
+                      </button>
+                    </>
+                  ) : (
+                    <span className="field-helper">Needs another admin</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -692,7 +717,9 @@ export function AdminDashboard({
           )}
           {(pendingRequests.length > 0 || pendingExpenses.length > 0) && (
             <div className="panel-footer">
-              <span>Employees are notified when you respond (email delivery coming soon).</span>
+              <span>
+                Employees are notified when you respond (email when SMTP is configured).
+              </span>
               <button
                 type="button"
                 className="text-button"
@@ -719,7 +746,7 @@ export function AdminDashboard({
           </div>
           <MiniMonthCalendar
             viewDate={calendarDate}
-            today={APP_TODAY}
+            today={today}
             absences={absences}
             bankHolidays={bankHolidays}
             employees={employees.map((item) => ({

@@ -8,17 +8,27 @@ import {
   type Account,
   type AccountRole,
 } from '../auth'
-import { companyInitials, type CompanySettings, type Employee, type SettingsTab } from '../domain'
+import { companyInitials, type CompanySettings, type SettingsTab } from '../domain'
 import {
+  bankHolidaysOverlappingMandatoryRanges,
   confirmationForLeaveYear,
   leaveYearKey,
   mandatoryBookingSignature,
   nextMandatoryRangeId,
   upsertMandatoryConfirmation,
+  type MandatoryLeaveConfirmation,
   type MandatoryLeaveRange,
 } from '../mandatoryLeave'
 import { formatLeaveYearLabel, type LeaveYearPeriod } from '../leaveYear'
 import { NOTIFICATION_EVENT_IDS, NOTIFICATION_EVENT_LABELS } from '../notifications'
+import {
+  confirmTwoFactor,
+  disableTwoFactor,
+  fetchNotificationStatus,
+  fetchTwoFactorStatus,
+  setupTwoFactor,
+  type PublicAccount,
+} from '../api'
 import {
   PAYROLL_DISCLAIMER,
   bankHolidaysForRegion,
@@ -34,7 +44,6 @@ export function SettingsPage({
   leaveYear,
   initialTab = 'company',
   accounts,
-  employees,
   currentAccountId,
   onSave,
   onBankHolidaysChange,
@@ -42,13 +51,13 @@ export function SettingsPage({
   onOpenLeaveYears,
   onUpdateAccount,
   onAddAccount,
+  onSessionAccountUpdated,
 }: {
   company: CompanySettings
   bankHolidays: BankHoliday[]
   leaveYear: LeaveYearPeriod
   initialTab?: SettingsTab
   accounts: Account[]
-  employees: Employee[]
   currentAccountId: number
   onSave: (settings: CompanySettings) => void
   onBankHolidaysChange: (holidays: BankHoliday[]) => void
@@ -59,10 +68,10 @@ export function SettingsPage({
     email: string
     displayName: string
     role: AccountRole
-    employeeId: number | null
     password: string
     jobTitle?: string
   }) => Promise<string | null>
+  onSessionAccountUpdated?: (account: PublicAccount) => void
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab)
   const [draft, setDraft] = useState(company)
@@ -70,12 +79,27 @@ export function SettingsPage({
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [newAccountEmail, setNewAccountEmail] = useState('')
   const [newAccountName, setNewAccountName] = useState('')
-  const [newAccountRole, setNewAccountRole] = useState<AccountRole>('employee')
-  const [newAccountEmployeeId, setNewAccountEmployeeId] = useState<number | ''>('')
+  const [newAccountRole, setNewAccountRole] = useState<AccountRole>('admin')
   const [newAccountPassword, setNewAccountPassword] = useState('')
   const [addAccountBusy, setAddAccountBusy] = useState(false)
+  const [mailStatus, setMailStatus] = useState<{ configured: boolean; from: string | null } | null>(
+    null,
+  )
   const currentAccount = accounts.find((item) => item.id === currentAccountId)
   const currentIsPrimary = Boolean(currentAccount?.isPrimary)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const result = await fetchNotificationStatus()
+      if (cancelled) return
+      if (result.ok) setMailStatus(result.data)
+      else setMailStatus({ configured: false, from: null })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     setDraft(company)
@@ -89,12 +113,22 @@ export function SettingsPage({
   const confirmation = confirmationForLeaveYear(draft.mandatoryLeaveConfirmations, leaveYear)
   const [noneThisYear, setNoneThisYear] = useState(confirmation?.noneThisYear ?? false)
   const [ranges, setRanges] = useState<MandatoryLeaveRange[]>(confirmation?.ranges ?? [])
+  const effectiveBankHolidays =
+    bankHolidays.length > 0
+      ? bankHolidays
+      : bankHolidaysForRegion(draft.bankHolidayRegion)
 
   useEffect(() => {
     const current = confirmationForLeaveYear(draft.mandatoryLeaveConfirmations, leaveYear)
     setNoneThisYear(current?.noneThisYear ?? false)
     setRanges(current?.ranges ?? [])
   }, [draft.mandatoryLeaveConfirmations, leaveYear])
+
+  useEffect(() => {
+    if (bankHolidays.length === 0) {
+      onBankHolidaysChange(bankHolidaysForRegion(draft.bankHolidayRegion))
+    }
+  }, [bankHolidays.length, draft.bankHolidayRegion, onBankHolidaysChange])
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'company', label: 'Company settings' },
@@ -115,42 +149,55 @@ export function SettingsPage({
     reader.readAsDataURL(file)
   }
 
-  const saveSettings = () => {
-    let mandatoryLeaveConfirmations = draft.mandatoryLeaveConfirmations
+  const validMandatoryRanges = ranges.filter(
+    (range) => range.start && range.end && range.start <= range.end,
+  )
+  const overlappingBankHolidays =
+    !noneThisYear
+      ? bankHolidaysOverlappingMandatoryRanges(validMandatoryRanges, effectiveBankHolidays)
+      : []
 
-    if (activeTab === 'leave') {
-      const validRanges = ranges.filter(
-        (range) => range.start && range.end && range.start <= range.end,
-      )
-      const previous = confirmationForLeaveYear(draft.mandatoryLeaveConfirmations, leaveYear)
-      const nextDraft = {
-        leaveYearKey: yearKey,
-        noneThisYear,
-        ranges: noneThisYear ? [] : validRanges,
-        confirmedAt: previous?.confirmedAt ?? new Date().toISOString(),
-      }
-      const shouldPersist =
-        noneThisYear || validRanges.length > 0 || Boolean(previous)
-      const contentChanged =
-        mandatoryBookingSignature(previous) !== mandatoryBookingSignature(nextDraft)
-
-      if (shouldPersist && contentChanged) {
-        mandatoryLeaveConfirmations = upsertMandatoryConfirmation(
-          draft.mandatoryLeaveConfirmations,
-          {
-            ...nextDraft,
-            confirmedAt: new Date().toISOString(),
-          },
-        )
-      }
-    }
-
+  const commitSave = (mandatoryLeaveConfirmations: MandatoryLeaveConfirmation[]) => {
     onSave({
       ...draft,
       defaultEntitlementUnit:
         draft.defaultEntitlementUnit === 'hours' ? 'days' : draft.defaultEntitlementUnit,
       mandatoryLeaveConfirmations,
     })
+  }
+
+  const saveSettings = () => {
+    let mandatoryLeaveConfirmations = draft.mandatoryLeaveConfirmations
+    let nextConfirmations = mandatoryLeaveConfirmations
+    let mandatoryChanged = false
+
+    if (activeTab === 'leave') {
+      const previous = confirmationForLeaveYear(draft.mandatoryLeaveConfirmations, leaveYear)
+      const nextDraft = {
+        leaveYearKey: yearKey,
+        noneThisYear,
+        ranges: noneThisYear ? [] : validMandatoryRanges,
+        confirmedAt: previous?.confirmedAt ?? new Date().toISOString(),
+      }
+      const shouldPersist =
+        noneThisYear || validMandatoryRanges.length > 0 || Boolean(previous)
+      const contentChanged =
+        mandatoryBookingSignature(previous) !== mandatoryBookingSignature(nextDraft)
+
+      if (shouldPersist && contentChanged) {
+        nextConfirmations = upsertMandatoryConfirmation(draft.mandatoryLeaveConfirmations, {
+          ...nextDraft,
+          confirmedAt: new Date().toISOString(),
+        })
+        mandatoryChanged = true
+      }
+
+      if (mandatoryChanged) {
+        mandatoryLeaveConfirmations = nextConfirmations
+      }
+    }
+
+    commitSave(mandatoryLeaveConfirmations)
   }
 
   return (
@@ -270,7 +317,13 @@ export function SettingsPage({
                       type="button"
                       className="button button-primary"
                       onClick={() => {
-                        const next = { ...draft, leaveYearConfigured: true }
+                        const next = {
+                          ...draft,
+                          leaveYearConfigured: true,
+                          leaveYearConfiguredAt:
+                            draft.leaveYearConfiguredAt ??
+                            new Date().toISOString().slice(0, 10),
+                        }
                         setDraft(next)
                         onSave({
                           ...next,
@@ -302,8 +355,9 @@ export function SettingsPage({
                   <h2>Mandatory annual leave</h2>
                   <p>
                     For {formatLeaveYearLabel(leaveYear)}. Saving books approved annual leave for
-                    every active employee on these dates. To exempt someone, cancel their booking
-                    from Requests.
+                    every active employee on these dates. Bank holidays inside a range are skipped
+                    automatically and do not reduce entitlement. To exempt someone, cancel their
+                    booking from Requests.
                   </p>
                 </div>
                 {!draft.leaveYearConfigured ? (
@@ -409,20 +463,13 @@ export function SettingsPage({
                           type="button"
                           className="button button-secondary"
                           onClick={() => {
-                            const startYear = Number(leaveYear.start.slice(0, 4))
-                            const endYear = Number(leaveYear.end.slice(0, 4))
-                            let decYear = startYear
-                            for (const year of [startYear, endYear]) {
-                              const probe = `${year}-12-01`
-                              if (probe >= leaveYear.start && probe <= leaveYear.end) decYear = year
-                            }
                             setRanges((current) => [
                               ...current,
                               {
                                 id: nextMandatoryRangeId(current),
-                                start: `${decYear}-12-24`,
-                                end: `${decYear + 1}-01-01`,
-                                label: 'Christmas shutdown',
+                                start: '',
+                                end: '',
+                                label: '',
                               },
                             ])
                           }}
@@ -430,6 +477,19 @@ export function SettingsPage({
                           <Plus size={15} />
                           Add date range
                         </button>
+                        {overlappingBankHolidays.length > 0 && (
+                          <div className="setup-banner setup-banner-info mandatory-bank-holiday-warning">
+                            <div>
+                              <strong>Bank holidays will be skipped</strong>
+                              <span>
+                                {overlappingBankHolidays
+                                  .map((holiday) => holiday.name)
+                                  .join(', ')}{' '}
+                                fall inside your ranges and won’t be booked as annual leave.
+                              </span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </>
@@ -570,7 +630,10 @@ export function SettingsPage({
               <div className="settings-section">
                 <div>
                   <h2>Automated payroll reports</h2>
-                  <p>Email a CSV report after each monthly pay period closes.</p>
+                  <p>
+                    When enabled, Finch emails a CSV plus summary after each pay period ends (once
+                    SMTP is configured). Manual send from Payroll reports still works anytime.
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -660,7 +723,7 @@ export function SettingsPage({
                   </select>
                 </label>
                 <div className="bank-holiday-list">
-                  {bankHolidays.map((holiday) => (
+                  {effectiveBankHolidays.map((holiday) => (
                     <div className="bank-holiday-row" key={holiday.date}>
                       <span>{formatDisplayDate(holiday.date)}</span>
                       <strong>{holiday.name}</strong>
@@ -674,18 +737,32 @@ export function SettingsPage({
           {activeTab === 'notifications' && (
             <>
               <div className="settings-callout">
-                <strong>Email delivery is not live yet.</strong>
-                <p>
-                  Finch stores your notification preferences locally, but no emails are sent from
-                  this app today. Sending mail requires a backend with SMTP credentials (or a
-                  service such as SendGrid or Amazon SES). That setup is planned for a later
-                  release.
-                </p>
+                {mailStatus?.configured ? (
+                  <>
+                    <strong>Email delivery is active.</strong>
+                    <p>
+                      Finch sends notification emails via the server SMTP settings
+                      {mailStatus.from ? ` (from ${mailStatus.from})` : ''}. Recipients are
+                      resolved from account emails — admins for submissions, the employee for
+                      reviews.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <strong>Email delivery needs SMTP on the server.</strong>
+                    <p>
+                      Preferences below are saved and will apply once{' '}
+                      <code>SMTP_HOST</code> and <code>SMTP_FROM</code> are set in the server
+                      environment (optional <code>SMTP_USER</code> / <code>SMTP_PASS</code>). Until
+                      then, Finch shows in-app notices only.
+                    </p>
+                  </>
+                )}
               </div>
               <div className="settings-section">
                 <div>
                   <h2>Email notifications</h2>
-                  <p>When email is enabled, send mail when leave requests are submitted or reviewed.</p>
+                  <p>When enabled, Finch emails the events selected below.</p>
                 </div>
                 <button
                   type="button"
@@ -736,8 +813,8 @@ export function SettingsPage({
             <>
               <div className="settings-section settings-section-stack">
                 <div>
-                  <h2>Two-factor authentication</h2>
-                  <p>Choose who must use password + 2FA, including passkeys.</p>
+                  <h2>Two-factor policy</h2>
+                  <p>Choose who must use an authenticator app when signing in.</p>
                 </div>
                 <div className="radio-list">
                   {([
@@ -756,19 +833,61 @@ export function SettingsPage({
                     </label>
                   ))}
                 </div>
-                <p className="field-helper">2FA is not enforced in this demo.</p>
+                <p className="field-helper">
+                  People covered by the policy must enrol before they can use Finch. Optional mode
+                  lets anyone turn 2FA on for their own account.
+                </p>
+              </div>
+              <div className="settings-divider" />
+              <TwoFactorAccountPanel
+                onNotify={onNotify}
+                onAccountUpdated={(account) => {
+                  onSessionAccountUpdated?.(account)
+                }}
+              />
+              <div className="settings-divider" />
+              <div className="settings-section settings-section-stack">
+                <div>
+                  <h2>Approvals</h2>
+                  <p>
+                    Organisation-wide rule for leave and expense review. It applies to every
+                    non-primary admin — not per account.
+                  </p>
+                </div>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={draft.adminsCanApproveOwnRequests}
+                    disabled={!currentIsPrimary}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        adminsCanApproveOwnRequests: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>Allow non-primary admins to approve their own requests</strong>
+                    <span className="field-helper">
+                      {currentIsPrimary
+                        ? 'Off by default. Changing this affects all non-primary admins. Primary admins can always review their own requests.'
+                        : 'Only the primary admin can change this setting.'}
+                    </span>
+                  </span>
+                </label>
               </div>
               <div className="settings-divider" />
               <div className="settings-section settings-section-stack">
                 <div>
                   <h2>Accounts</h2>
-                  <p>Manage who can sign in, approve leave, and edit settings.</p>
+                  <p>
+                    Manage who can sign in and approve leave. Every account includes an employee
+                    profile automatically — use the Admin / Employee switch in the top bar to move
+                    between views.
+                  </p>
                 </div>
                 <div className="account-admin-list">
                   {accounts.map((account) => {
-                    const linked = account.employeeId
-                      ? employees.find((item) => item.id === account.employeeId)
-                      : undefined
                     const isSelf = account.id === currentAccountId
                     const isPrimary = Boolean(account.isPrimary)
                     const isLastAdmin =
@@ -777,7 +896,7 @@ export function SettingsPage({
                       activeAdminCount(accounts) <= 1
                     return (
                       <div className="account-admin-row" key={account.id}>
-                        <div>
+                        <div className="account-admin-copy">
                           <strong>
                             {account.displayName}
                             {isSelf ? ' (you)' : ''}
@@ -786,7 +905,6 @@ export function SettingsPage({
                           <span>
                             {account.email} · {account.role}
                             {account.status === 'Inactive' ? ' · inactive' : ''}
-                            {linked ? ` · ${linked.name}` : account.role === 'admin' ? ' · no employee link' : ''}
                           </span>
                         </div>
                         <div className="account-admin-actions">
@@ -875,6 +993,7 @@ export function SettingsPage({
                   </button>
                 ) : (
                   <div className="account-add-form">
+                    <strong className="account-add-heading">New account</strong>
                     <label>
                       Email
                       <input
@@ -898,26 +1017,8 @@ export function SettingsPage({
                           setNewAccountRole(event.target.value as AccountRole)
                         }
                       >
-                        <option value="employee">Employee</option>
                         <option value="admin">Admin</option>
-                      </select>
-                    </label>
-                    <label>
-                      Linked employee
-                      <select
-                        value={newAccountEmployeeId === '' ? '' : String(newAccountEmployeeId)}
-                        onChange={(event) =>
-                          setNewAccountEmployeeId(
-                            event.target.value ? Number(event.target.value) : '',
-                          )
-                        }
-                      >
-                        <option value="">None</option>
-                        {employees.map((employee) => (
-                          <option key={employee.id} value={employee.id}>
-                            {employee.name}
-                          </option>
-                        ))}
+                        <option value="employee">Employee</option>
                       </select>
                     </label>
                     <label>
@@ -928,6 +1029,27 @@ export function SettingsPage({
                         onChange={(event) => setNewAccountPassword(event.target.value)}
                       />
                     </label>
+                    {newAccountRole === 'admin' && currentIsPrimary && (
+                      <label className="toggle-row account-add-approval-policy">
+                        <input
+                          type="checkbox"
+                          checked={draft.adminsCanApproveOwnRequests}
+                          onChange={(event) =>
+                            setDraft({
+                              ...draft,
+                              adminsCanApproveOwnRequests: event.target.checked,
+                            })
+                          }
+                        />
+                        <span>
+                          <strong>Allow non-primary admins to approve their own requests</strong>
+                          <span className="field-helper">
+                            Organisation-wide setting for all non-primary admins — not only this
+                            account. Primary admins can always approve their own.
+                          </span>
+                        </span>
+                      </label>
+                    )}
                     <div className="account-admin-actions">
                       <button
                         type="button"
@@ -946,8 +1068,6 @@ export function SettingsPage({
                             email: newAccountEmail,
                             displayName: newAccountName,
                             role: newAccountRole,
-                            employeeId:
-                              newAccountEmployeeId === '' ? null : newAccountEmployeeId,
                             password: newAccountPassword,
                           })
                           setAddAccountBusy(false)
@@ -955,11 +1075,24 @@ export function SettingsPage({
                             onNotify(error)
                             return
                           }
+                          if (
+                            newAccountRole === 'admin' &&
+                            currentIsPrimary &&
+                            draft.adminsCanApproveOwnRequests !==
+                              company.adminsCanApproveOwnRequests
+                          ) {
+                            onSave({
+                              ...draft,
+                              defaultEntitlementUnit:
+                                draft.defaultEntitlementUnit === 'hours'
+                                  ? 'days'
+                                  : draft.defaultEntitlementUnit,
+                            })
+                          }
                           setShowAddAccount(false)
                           setNewAccountEmail('')
                           setNewAccountName('')
-                          setNewAccountRole('employee')
-                          setNewAccountEmployeeId('')
+                          setNewAccountRole('admin')
                           setNewAccountPassword('')
                         }}
                       >
@@ -991,6 +1124,208 @@ export function SettingsPage({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function TwoFactorAccountPanel({
+  onNotify,
+  onAccountUpdated,
+}: {
+  onNotify: (message: string) => void
+  onAccountUpdated: (account: PublicAccount) => void
+}) {
+  const [status, setStatus] = useState<{
+    totpEnabled: boolean
+    recoveryCodesRemaining: number
+    required: boolean
+  } | null>(null)
+  const [mode, setMode] = useState<'idle' | 'setup' | 'disable' | 'codes'>('idle')
+  const [secret, setSecret] = useState('')
+  const [qrDataUrl, setQrDataUrl] = useState('')
+  const [code, setCode] = useState('')
+  const [password, setPassword] = useState('')
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const refresh = async () => {
+    const result = await fetchTwoFactorStatus()
+    if (result.ok) {
+      setStatus({
+        totpEnabled: result.data.totpEnabled,
+        recoveryCodesRemaining: result.data.recoveryCodesRemaining,
+        required: result.data.required,
+      })
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  const beginSetup = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      const result = await setupTwoFactor()
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setSecret(result.data.secret)
+      setQrDataUrl(result.data.qrDataUrl)
+      setCode('')
+      setMode('setup')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirmSetup = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      const result = await confirmTwoFactor(code)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setRecoveryCodes(result.data.recoveryCodes)
+      onAccountUpdated(result.data.account)
+      setMode('codes')
+      await refresh()
+      onNotify('Authenticator enabled')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const disable = async () => {
+    setError('')
+    setBusy(true)
+    try {
+      const result = await disableTwoFactor(password, code)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      onAccountUpdated(result.data.account)
+      setMode('idle')
+      setPassword('')
+      setCode('')
+      await refresh()
+      onNotify('Authenticator disabled')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="settings-section settings-section-stack">
+      <div>
+        <h2>Your authenticator</h2>
+        <p>Use an app such as Google Authenticator or 1Password for sign-in codes.</p>
+      </div>
+      {status && (
+        <p className="field-helper">
+          {status.totpEnabled
+            ? `Enabled · ${status.recoveryCodesRemaining} recovery code${status.recoveryCodesRemaining === 1 ? '' : 's'} left`
+            : status.required
+              ? 'Required for your role — enable it below.'
+              : 'Not enabled on this account.'}
+        </p>
+      )}
+
+      {mode === 'idle' && (
+        <div className="account-admin-actions">
+          {!status?.totpEnabled ? (
+            <button type="button" className="button button-secondary" disabled={busy} onClick={() => void beginSetup()}>
+              Enable authenticator
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="button button-secondary"
+              disabled={busy || Boolean(status?.required)}
+              title={status?.required ? 'Required by organisation policy' : undefined}
+              onClick={() => {
+                setMode('disable')
+                setError('')
+                setCode('')
+                setPassword('')
+              }}
+            >
+              Disable authenticator
+            </button>
+          )}
+        </div>
+      )}
+
+      {mode === 'setup' && (
+        <div className="totp-setup-panel">
+          {qrDataUrl && <img className="totp-qr" src={qrDataUrl} alt="Authenticator QR code" width={180} height={180} />}
+          <p className="field-helper">
+            Manual key: <code>{secret}</code>
+          </p>
+          <label>
+            Confirmation code
+            <input value={code} onChange={(event) => setCode(event.target.value)} autoComplete="one-time-code" />
+          </label>
+          {error && <p className="login-error">{error}</p>}
+          <div className="account-admin-actions">
+            <button type="button" className="button button-secondary" onClick={() => setMode('idle')}>
+              Cancel
+            </button>
+            <button type="button" className="button button-primary" disabled={busy} onClick={() => void confirmSetup()}>
+              Confirm
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mode === 'codes' && (
+        <div className="totp-setup-panel">
+          <p className="field-helper">Save these recovery codes now — they won’t be shown again.</p>
+          <ul className="totp-recovery-list">
+            {recoveryCodes.map((item) => (
+              <li key={item}>
+                <code>{item}</code>
+              </li>
+            ))}
+          </ul>
+          <button type="button" className="button button-primary" onClick={() => setMode('idle')}>
+            Done
+          </button>
+        </div>
+      )}
+
+      {mode === 'disable' && (
+        <div className="totp-setup-panel">
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          <label>
+            Authenticator or recovery code
+            <input value={code} onChange={(event) => setCode(event.target.value)} autoComplete="one-time-code" />
+          </label>
+          {error && <p className="login-error">{error}</p>}
+          <div className="account-admin-actions">
+            <button type="button" className="button button-secondary" onClick={() => setMode('idle')}>
+              Cancel
+            </button>
+            <button type="button" className="button button-primary" disabled={busy} onClick={() => void disable()}>
+              Disable
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

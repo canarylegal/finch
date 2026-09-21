@@ -38,6 +38,7 @@ type AdminRequestsProps = {
   onOpenExpense: (claimId: number) => void
   onApproveExpense: (claimId: number) => void
   onCancelApproved?: (id: number) => void
+  canReviewEmployee?: (employeeId: number) => boolean
 }
 
 export function AdminRequests({
@@ -56,6 +57,7 @@ export function AdminRequests({
   onOpenExpense,
   onApproveExpense,
   onCancelApproved,
+  canReviewEmployee = () => true,
 }: AdminRequestsProps) {
   const entitlementSettings = companyEntitlementSettings(company)
   const [tab, setTab] = useState<RequestsTab>(initialTab)
@@ -219,22 +221,28 @@ export function AdminRequests({
                   <span className={`status ${request.status.toLowerCase()}`}>{request.status}</span>
                   {request.status === 'Pending' && (
                     <div className="request-actions">
-                      <button
-                        type="button"
-                        className="approve-button"
-                        onClick={() => onUpdateRequest(request.id, 'Approved')}
-                      >
-                        <Check size={15} />
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className="decline-button"
-                        onClick={() => onUpdateRequest(request.id, 'Declined')}
-                      >
-                        <X size={15} />
-                        Decline
-                      </button>
+                      {canReviewEmployee(request.employeeId) ? (
+                        <>
+                          <button
+                            type="button"
+                            className="approve-button"
+                            onClick={() => onUpdateRequest(request.id, 'Approved')}
+                          >
+                            <Check size={15} />
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            className="decline-button"
+                            onClick={() => onUpdateRequest(request.id, 'Declined')}
+                          >
+                            <X size={15} />
+                            Decline
+                          </button>
+                        </>
+                      ) : (
+                        <span className="field-helper">Needs another admin</span>
+                      )}
                     </div>
                   )}
                   {request.status === 'Approved' && onCancelApproved && (
@@ -294,22 +302,28 @@ export function AdminRequests({
                 <span className={`status ${claim.status.toLowerCase()}`}>{claim.status}</span>
                 {claim.status === 'Pending' && (
                   <div className="request-actions">
-                    <button
-                      type="button"
-                      className="approve-button"
-                      onClick={() => onApproveExpense(claim.id)}
-                    >
-                      <Check size={15} />
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="decline-button"
-                      onClick={() => onOpenExpense(claim.id)}
-                    >
-                      <X size={15} />
-                      Decline
-                    </button>
+                    {canReviewEmployee(claim.employeeId) ? (
+                      <>
+                        <button
+                          type="button"
+                          className="approve-button"
+                          onClick={() => onApproveExpense(claim.id)}
+                        >
+                          <Check size={15} />
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="decline-button"
+                          onClick={() => onOpenExpense(claim.id)}
+                        >
+                          <X size={15} />
+                          Decline
+                        </button>
+                      </>
+                    ) : (
+                      <span className="field-helper">Needs another admin</span>
+                    )}
                   </div>
                 )}
               </div>

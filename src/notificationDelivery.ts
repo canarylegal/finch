@@ -1,28 +1,40 @@
 import type { CompanySettings } from './domain'
 import type { NotificationEventId } from './notifications'
+import { dispatchNotificationRequest } from './api'
 
 export function shouldNotify(company: CompanySettings, eventId: NotificationEventId) {
   return company.emailNotifications && company.notificationEvents[eventId]
 }
 
-export function leaveSubmittedNotification(employeeName: string, dates: string) {
-  return `Email queued: leave request from ${employeeName} (${dates})`
+export type NotificationDispatchDetails = {
+  employeeName?: string
+  dates?: string
+  amountLabel?: string
+  status?: string
+  documentTitle?: string
+  probationDate?: string
 }
 
-export function leaveReviewedNotification(employeeName: string, status: 'Approved' | 'Declined', dates: string) {
-  const verb = status === 'Approved' ? 'approved' : 'declined'
-  return `Email queued: ${employeeName}'s leave (${dates}) ${verb}`
-}
-
-export function expenseSubmittedNotification(employeeName: string, amountLabel: string) {
-  return `Email queued: expense claim from ${employeeName} (${amountLabel})`
-}
-
-export function expenseReviewedNotification(
-  employeeName: string,
-  status: 'Approved' | 'Declined',
-  amountLabel: string,
-) {
-  const verb = status === 'Approved' ? 'approved' : 'declined'
-  return `Email queued: ${employeeName}'s expense (${amountLabel}) ${verb}`
+export async function dispatchNotificationEmail(
+  eventId: NotificationEventId,
+  options: {
+    employeeId?: number | null
+    details?: NotificationDispatchDetails
+  } = {},
+): Promise<string> {
+  const result = await dispatchNotificationRequest({
+    eventId,
+    employeeId: options.employeeId ?? null,
+    details: options.details ?? {},
+  })
+  if (!result.ok) {
+    return result.error || 'Email failed to send'
+  }
+  if (result.data.sent) {
+    const count = result.data.recipients ?? 0
+    return count > 0
+      ? `Email sent (${count} recipient${count === 1 ? '' : 's'})`
+      : 'Email sent'
+  }
+  return result.data.message || 'Email skipped'
 }

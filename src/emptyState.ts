@@ -18,6 +18,7 @@ export type FinchRuntimeData = {
   documentFolders: import('./domain').DocumentFolder[]
   employeeDocuments: import('./domain').EmployeeDocument[]
   expenseClaims: ExpenseClaim[]
+  vatReceipts: import('./vatReceipts').VatReceipt[]
   taskDismissals: import('./hrTasks').TaskDismissal[]
   policies: import('./domain').PolicyDocument[]
   leaveAdjustments: LeaveAdjustment[]
@@ -36,6 +37,7 @@ export function emptyRuntimeData(): FinchRuntimeData {
     documentFolders: [],
     employeeDocuments: [],
     expenseClaims: [],
+    vatReceipts: [],
     taskDismissals: [],
     policies: [],
     leaveAdjustments: [],

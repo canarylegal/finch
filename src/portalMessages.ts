@@ -1,8 +1,5 @@
 import { toIsoDate } from './calendarUtils'
-import { APP_TODAY } from './domain'
 import type { PortalMessage } from './domain'
-
-export const ADMIN_DISPLAY_NAME = 'Alex Morgan'
 
 export function nextPortalMessageId(messages: PortalMessage[]) {
   return Math.max(0, ...messages.map((message) => message.id)) + 1
@@ -20,22 +17,25 @@ export function messagesForEmployee(messages: PortalMessage[], employeeId: numbe
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
-export function unreadCountForRequest(messages: PortalMessage[], requestId: number, viewer: 'employee' | 'admin') {
+export function unreadCountForRequest(
+  messages: PortalMessage[],
+  requestId: number,
+  viewer: 'employee' | 'admin',
+) {
   const otherAuthor = viewer === 'admin' ? 'employee' : 'admin'
-  return messagesForRequest(messages, requestId).filter((message) => message.author === otherAuthor).length
+  return messagesForRequest(messages, requestId).filter((message) => message.author === otherAuthor)
+    .length
 }
 
 export function createPortalMessage(
   messages: PortalMessage[],
   payload: Omit<PortalMessage, 'id' | 'createdAt'>,
-  at: Date = APP_TODAY,
+  at: Date = new Date(),
 ): PortalMessage {
-  // Keep demo timestamps aligned with APP_TODAY (noon UTC on that calendar day).
-  const createdAt = `${toIsoDate(at)}T12:00:00.000Z`
   return {
     ...payload,
     id: nextPortalMessageId(messages),
-    createdAt,
+    createdAt: at.toISOString(),
   }
 }
 

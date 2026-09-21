@@ -23,9 +23,13 @@ import {
   formatWorkingWeek,
   getPayPeriodForEndMonth,
   payrollReportToCsv,
+  payrollReportToEmailBody,
   type PayrollReportRow,
 } from './payroll'
 import type { LeaveRequest } from './domain'
+import { appToday } from './domain'
+import { toIsoDate } from './calendarUtils'
+import { emailPayrollReportRequest } from './api'
 import { leaveRequestTypeFromAbsenceType } from './leaveTypes'
 
 type Employee = {
@@ -37,17 +41,20 @@ type Employee = {
 
 export function RecordAbsenceModal({
   employees,
+  recordedBy,
   onClose,
   onSubmit,
 }: {
   employees: Employee[]
+  recordedBy: string
   onSubmit: (record: Omit<AbsenceRecord, 'id' | 'recordedAt'>) => void
   onClose: () => void
 }) {
+  const todayIso = toIsoDate(appToday())
   const [employeeId, setEmployeeId] = useState(employees[0]?.id ?? 0)
   const [type, setType] = useState<AbsenceType>('sick_paid')
-  const [startDate, setStartDate] = useState('2026-09-01')
-  const [endDate, setEndDate] = useState('2026-09-01')
+  const [startDate, setStartDate] = useState(todayIso)
+  const [endDate, setEndDate] = useState(todayIso)
   const [note, setNote] = useState('')
   const [adjustmentLabel, setAdjustmentLabel] = useState('')
 
@@ -176,7 +183,7 @@ export function RecordAbsenceModal({
                 end: endDate,
                 amount: dayCount,
                 note,
-                recordedBy: 'Alex Morgan',
+                recordedBy,
                 adjustmentLabel: showAdjustment ? adjustmentLabel : undefined,
               })
             }
@@ -393,6 +400,7 @@ export function PayrollReportsPage({
   bankHolidays,
   payrollEmail,
   payPeriodStartDay,
+  companyName,
   onNotify,
 }: {
   employees: Employee[]
@@ -400,6 +408,7 @@ export function PayrollReportsPage({
   bankHolidays: BankHoliday[]
   payrollEmail: string
   payPeriodStartDay: number
+  companyName?: string
   onNotify: (message: string) => void
 }) {
   const [year, setYear] = useState(2026)
@@ -432,7 +441,22 @@ export function PayrollReportsPage({
       onNotify('Add a payroll email in Settings first')
       return
     }
-    onNotify(`Report emailed to ${payrollEmail}`)
+    void (async () => {
+      const csv = payrollReportToCsv(rows)
+      const periodLabel = formatPayPeriodLabel(period.start, period.end)
+      const result = await emailPayrollReportRequest({
+        to: payrollEmail,
+        subject: `Finch payroll report — ${periodLabel}`,
+        csv,
+        filename: `finch-payroll-${period.start}.csv`,
+        text: payrollReportToEmailBody(rows, { companyName, periodLabel }),
+      })
+      if (!result.ok) {
+        onNotify(result.error)
+        return
+      }
+      onNotify(`Report emailed to ${result.data.to}`)
+    })()
   }
 
   return (

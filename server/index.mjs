@@ -7,19 +7,49 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import rateLimit from 'express-rate-limit'
 import dotenv from 'dotenv'
+import {
+  dispatchNotificationEmail,
+  mailStatusPublic,
+  reasonMessage,
+  sendMail,
+} from './email.mjs'
+import {
+  closeStore,
+  defaultStore,
+  emptyAppData,
+  emptyCompany,
+  getStoreBackend,
+  initStore,
+  readStore,
+  writeStore,
+} from './store.mjs'
+import {
+  buildTotpUri,
+  consumeRecoveryCode,
+  createRecoveryCodes,
+  createTotpSecret,
+  policyRequiresTwoFactor,
+  publicTotpStatus,
+  totpQrDataUrl,
+  verifyTotpCode,
+} from './totp.mjs'
 
 dotenv.config()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
-const DATA_DIR = path.join(ROOT, 'data')
-const STORE_PATH = path.join(DATA_DIR, 'finch-store.json')
 
 const PORT = Number(process.env.PORT || 8787)
 const SESSION_SECRET = process.env.SESSION_SECRET || ''
 const COOKIE_NAME = 'finch_session'
 const BCRYPT_ROUNDS = 12
+const IS_PROD = process.env.NODE_ENV === 'production'
+const COOKIE_SECURE = ['1', 'true', 'yes', 'on'].includes(
+  (process.env.COOKIE_SECURE || (IS_PROD ? 'true' : 'false')).trim().toLowerCase(),
+)
+const TRUST_PROXY = (process.env.TRUST_PROXY || (IS_PROD ? '1' : 'false')).trim()
 
 function requireEnv(name, minLen = 1) {
   const value = (process.env[name] || '').trim()
@@ -35,10 +65,13 @@ function loadMasterConfig() {
   const require2fa = ['1', 'true', 'yes', 'on'].includes(
     (process.env.MASTER_ADMIN_REQUIRE_2FA || 'false').trim().toLowerCase(),
   )
-  if (require2fa) {
-    throw new Error('MASTER_ADMIN_REQUIRE_2FA is not supported yet; set it to false')
+  const totpSecret = (process.env.MASTER_ADMIN_TOTP_SECRET || '').trim()
+  if (require2fa && totpSecret.length < 16) {
+    throw new Error(
+      'MASTER_ADMIN_REQUIRE_2FA is enabled but MASTER_ADMIN_TOTP_SECRET is missing (min 16 chars base32)',
+    )
   }
-  return { login, password, require2fa }
+  return { login, password, require2fa, totpSecret }
 }
 
 if (!SESSION_SECRET || SESSION_SECRET.length < 16) {
@@ -46,80 +79,6 @@ if (!SESSION_SECRET || SESSION_SECRET.length < 16) {
 }
 
 const masterConfig = loadMasterConfig()
-
-function emptyCompany() {
-  return {
-    name: '',
-    logoUrl: null,
-    leaveYearStart: 'January',
-    leaveYearEnd: 'December',
-    leaveYearConfigured: false,
-    mandatoryLeaveConfirmations: [],
-    defaultRollOver: false,
-    defaultEntitlement: 25,
-    defaultEntitlementUnit: 'days',
-    defaultWorkingDays: [1, 2, 3, 4, 5],
-    entitlementIncludesBankHolidays: false,
-    emailNotifications: true,
-    notificationEvents: {
-      leaveRequestSubmitted: true,
-      leaveRequestReviewed: true,
-      expenseSubmitted: true,
-      expenseReviewed: true,
-    },
-    twoFactorRequired: 'admins',
-    payrollEmail: '',
-    autoSendPayrollReport: false,
-    autoSendDayOfMonth: 3,
-    payPeriodStartDay: 10,
-    bankHolidayRegion: 'england-wales',
-  }
-}
-
-function emptyAppData() {
-  return {
-    employees: [],
-    absences: [],
-    company: emptyCompany(),
-    bankHolidays: [],
-    requests: [],
-    portalMessages: [],
-    documentFolders: [],
-    employeeDocuments: [],
-    expenseClaims: [],
-    taskDismissals: [],
-    policies: [],
-    leaveAdjustments: [],
-    leaveYearClosures: [],
-  }
-}
-
-function defaultStore() {
-  return {
-    accounts: [],
-    appData: emptyAppData(),
-    nextAccountId: 1,
-  }
-}
-
-function ensureStore() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-  if (!fs.existsSync(STORE_PATH)) {
-    fs.writeFileSync(STORE_PATH, JSON.stringify(defaultStore(), null, 2))
-  }
-}
-
-function readStore() {
-  ensureStore()
-  return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'))
-}
-
-function writeStore(store) {
-  ensureStore()
-  const tmp = `${STORE_PATH}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2))
-  fs.renameSync(tmp, STORE_PATH)
-}
 
 function publicAccount(account) {
   return {
@@ -132,6 +91,7 @@ function publicAccount(account) {
     status: account.status,
     jobTitle: account.jobTitle,
     isPrimary: Boolean(account.isPrimary),
+    ...publicTotpStatus(account),
   }
 }
 
@@ -144,21 +104,25 @@ function initialsFromName(name) {
     .join('')
 }
 
-function signToken(payload) {
-  return jwt.sign(payload, SESSION_SECRET, { expiresIn: '12h' })
+function signToken(payload, expiresIn = '12h') {
+  return jwt.sign(payload, SESSION_SECRET, { expiresIn })
 }
 
-function setSessionCookie(res, token) {
+function setSessionCookie(res, token, maxAgeMs = 12 * 60 * 60 * 1000) {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 12 * 60 * 60 * 1000,
+    secure: COOKIE_SECURE,
+    maxAge: maxAgeMs,
   })
 }
 
 function clearSessionCookie(res) {
-  res.clearCookie(COOKIE_NAME)
+  res.clearCookie(COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: COOKIE_SECURE,
+  })
 }
 
 function readAuth(req) {
@@ -169,6 +133,17 @@ function readAuth(req) {
   } catch {
     return null
   }
+}
+
+function companyTwoFactorPolicy(store) {
+  const policy = store.appData?.company?.twoFactorRequired
+  if (policy === 'all' || policy === 'admins' || policy === 'optional') return policy
+  return 'admins'
+}
+
+function setPendingTwoFactorCookie(res, payload) {
+  const token = signToken(payload, '10m')
+  setSessionCookie(res, token, 10 * 60 * 1000)
 }
 
 function timingSafeEqualString(a, b) {
@@ -182,6 +157,12 @@ function timingSafeEqualString(a, b) {
 }
 
 const app = express()
+if (TRUST_PROXY === '1' || TRUST_PROXY.toLowerCase() === 'true') {
+  app.set('trust proxy', 1)
+} else if (/^\d+$/.test(TRUST_PROXY)) {
+  app.set('trust proxy', Number(TRUST_PROXY))
+}
+
 app.use(
   cors({
     origin: true,
@@ -191,12 +172,32 @@ app.use(
 app.use(express.json({ limit: '15mb' }))
 app.use(cookieParser())
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true })
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('X-Frame-Options', 'DENY')
+  next()
 })
 
-app.get('/api/bootstrap', (req, res) => {
-  const store = readStore()
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.LOGIN_RATE_LIMIT || 30),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many sign-in attempts. Try again later.' },
+})
+
+app.get('/api/health', async (_req, res) => {
+  try {
+    await readStore()
+    res.json({ ok: true, store: getStoreBackend() })
+  } catch (error) {
+    res.status(503).json({ ok: false, error: 'Store unavailable' })
+  }
+})
+
+app.get('/api/bootstrap', async (req, res) => {
+  const store = await readStore()
   const session = readAuth(req)
   res.json({
     hasAccounts: store.accounts.length > 0,
@@ -211,7 +212,7 @@ app.get('/api/bootstrap', (req, res) => {
   })
 })
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const email = String(req.body?.email || '')
     .trim()
     .toLowerCase()
@@ -224,16 +225,26 @@ app.post('/api/auth/login', async (req, res) => {
   const masterLoginOk = timingSafeEqualString(email, masterConfig.login)
   const masterPasswordOk = timingSafeEqualString(password, masterConfig.password)
   if (masterLoginOk && masterPasswordOk) {
+    const recoveryStore = await readStore()
+    if (masterConfig.require2fa) {
+      setPendingTwoFactorCookie(res, { kind: 'pending_2fa_master' })
+      return res.json({
+        requires2fa: true,
+        challenge: 'master',
+        displayName: 'Master recovery',
+        hasAccounts: recoveryStore.accounts.length > 0,
+      })
+    }
     const token = signToken({ kind: 'master_recovery' })
     setSessionCookie(res, token)
     return res.json({
       recovery: true,
       displayName: 'Master recovery',
-      hasAccounts: readStore().accounts.length > 0,
+      hasAccounts: recoveryStore.accounts.length > 0,
     })
   }
 
-  const store = readStore()
+  const store = await readStore()
   const account = store.accounts.find((item) => item.email === email)
   if (!account) {
     return res.status(401).json({ error: 'Email or password is incorrect' })
@@ -246,6 +257,27 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(401).json({ error: 'Email or password is incorrect' })
   }
 
+  const policy = companyTwoFactorPolicy(store)
+  const required = policyRequiresTwoFactor(policy, account.role)
+  const enabled = Boolean(account.totpEnabled && account.totpSecret)
+
+  if (required && enabled) {
+    setPendingTwoFactorCookie(res, { kind: 'pending_2fa', accountId: account.id })
+    return res.json({
+      requires2fa: true,
+      challenge: 'account',
+      account: publicAccount(account),
+    })
+  }
+
+  if (required && !enabled) {
+    setPendingTwoFactorCookie(res, { kind: 'pending_2fa_setup', accountId: account.id })
+    return res.json({
+      mustSetup2fa: true,
+      account: publicAccount(account),
+    })
+  }
+
   const token = signToken({ kind: 'account', accountId: account.id })
   setSessionCookie(res, token)
   return res.json({ account: publicAccount(account) })
@@ -256,11 +288,36 @@ app.post('/api/auth/logout', (_req, res) => {
   res.json({ ok: true })
 })
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   const session = readAuth(req)
   if (!session) return res.status(401).json({ error: 'Not signed in' })
+
+  if (session.kind === 'pending_2fa' || session.kind === 'pending_2fa_setup') {
+    const store = await readStore()
+    const account = store.accounts.find((item) => item.id === session.accountId)
+    if (!account || account.status !== 'Active') {
+      clearSessionCookie(res)
+      return res.status(401).json({ error: 'Not signed in' })
+    }
+    return res.json({
+      kind: session.kind,
+      account: publicAccount(account),
+      orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
+    })
+  }
+
+  if (session.kind === 'pending_2fa_master') {
+    const store = await readStore()
+    return res.json({
+      kind: 'pending_2fa_master',
+      displayName: 'Master recovery',
+      hasAccounts: store.accounts.length > 0,
+      orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
+    })
+  }
+
   if (session.kind === 'master_recovery') {
-    const store = readStore()
+    const store = await readStore()
     return res.json({
       kind: 'master_recovery',
       displayName: 'Master recovery',
@@ -268,7 +325,11 @@ app.get('/api/auth/me', (req, res) => {
       orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
     })
   }
-  const store = readStore()
+  if (session.kind !== 'account') {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: 'Not signed in' })
+  }
+  const store = await readStore()
   const account = store.accounts.find((item) => item.id === session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
@@ -290,13 +351,13 @@ function requireRecovery(req, res) {
   return session
 }
 
-function requireAccount(req, res) {
+async function requireAccount(req, res) {
   const session = readAuth(req)
   if (!session || session.kind !== 'account') {
     res.status(401).json({ error: 'Not signed in' })
     return null
   }
-  const store = readStore()
+  const store = await readStore()
   const account = store.accounts.find((item) => item.id === session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
@@ -306,9 +367,163 @@ function requireAccount(req, res) {
   return { session, account, store }
 }
 
-app.get('/api/recovery/accounts', (req, res) => {
+async function requireAccountOrSetup(req, res) {
+  const session = readAuth(req)
+  if (
+    !session ||
+    (session.kind !== 'account' && session.kind !== 'pending_2fa_setup')
+  ) {
+    res.status(401).json({ error: 'Not signed in' })
+    return null
+  }
+  const store = await readStore()
+  const account = store.accounts.find((item) => item.id === session.accountId)
+  if (!account || account.status !== 'Active') {
+    clearSessionCookie(res)
+    res.status(401).json({ error: 'Not signed in' })
+    return null
+  }
+  return { session, account, store }
+}
+
+const twoFactorLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.TOTP_RATE_LIMIT || 40),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many verification attempts. Try again later.' },
+})
+
+app.post('/api/auth/2fa/verify', twoFactorLimiter, async (req, res) => {
+  const session = readAuth(req)
+  const code = String(req.body?.code || '')
+  if (!session) return res.status(401).json({ error: 'Not signed in' })
+
+  if (session.kind === 'pending_2fa_master') {
+    const ok = await verifyTotpCode(masterConfig.totpSecret, code)
+    if (!ok) return res.status(401).json({ error: 'Invalid authentication code' })
+    const token = signToken({ kind: 'master_recovery' })
+    setSessionCookie(res, token)
+    const store = await readStore()
+    return res.json({
+      recovery: true,
+      displayName: 'Master recovery',
+      hasAccounts: store.accounts.length > 0,
+    })
+  }
+
+  if (session.kind !== 'pending_2fa') {
+    return res.status(400).json({ error: 'No two-factor challenge in progress' })
+  }
+
+  const store = await readStore()
+  const account = store.accounts.find((item) => item.id === session.accountId)
+  if (!account || account.status !== 'Active') {
+    clearSessionCookie(res)
+    return res.status(401).json({ error: 'Not signed in' })
+  }
+
+  let ok = await verifyTotpCode(account.totpSecret, code)
+  if (!ok) {
+    ok = await consumeRecoveryCode(account, code)
+    if (ok) await writeStore(store)
+  }
+  if (!ok) return res.status(401).json({ error: 'Invalid authentication code' })
+
+  const token = signToken({ kind: 'account', accountId: account.id })
+  setSessionCookie(res, token)
+  return res.json({ account: publicAccount(account) })
+})
+
+app.post('/api/auth/2fa/setup', async (req, res) => {
+  const ctx = await requireAccountOrSetup(req, res)
+  if (!ctx) return
+  const { account, store } = ctx
+
+  const secret = createTotpSecret()
+  account.totpPendingSecret = secret
+  await writeStore(store)
+
+  const issuer = store.appData?.company?.name?.trim() || 'Finch'
+  const uri = buildTotpUri({ secret, email: account.email, issuer })
+  const qrDataUrl = await totpQrDataUrl(uri)
+  return res.json({
+    secret,
+    uri,
+    qrDataUrl,
+  })
+})
+
+app.post('/api/auth/2fa/confirm', twoFactorLimiter, async (req, res) => {
+  const ctx = await requireAccountOrSetup(req, res)
+  if (!ctx) return
+  const { account, store, session } = ctx
+  const code = String(req.body?.code || '')
+  const secret = account.totpPendingSecret || account.totpSecret
+  if (!secret) {
+    return res.status(400).json({ error: 'Start authenticator setup first' })
+  }
+  const ok = await verifyTotpCode(secret, code)
+  if (!ok) return res.status(401).json({ error: 'Invalid authentication code' })
+
+  const { codes, hashes } = await createRecoveryCodes()
+  account.totpSecret = secret
+  account.totpEnabled = true
+  account.totpPendingSecret = null
+  account.totpRecoveryHashes = hashes
+  await writeStore(store)
+
+  if (session.kind === 'pending_2fa_setup') {
+    const token = signToken({ kind: 'account', accountId: account.id })
+    setSessionCookie(res, token)
+  }
+
+  return res.json({
+    account: publicAccount(account),
+    recoveryCodes: codes,
+  })
+})
+
+app.post('/api/auth/2fa/disable', async (req, res) => {
+  const ctx = await requireAccount(req, res)
+  if (!ctx) return
+  const { account, store } = ctx
+  const password = String(req.body?.password || '')
+  const code = String(req.body?.code || '')
+  if (!password) return res.status(400).json({ error: 'Password is required' })
+
+  const passwordOk = await bcrypt.compare(password, account.passwordHash)
+  if (!passwordOk) return res.status(401).json({ error: 'Password is incorrect' })
+
+  if (account.totpEnabled && account.totpSecret) {
+    let codeOk = await verifyTotpCode(account.totpSecret, code)
+    if (!codeOk) codeOk = await consumeRecoveryCode(account, code)
+    if (!codeOk) return res.status(401).json({ error: 'Invalid authentication code' })
+  }
+
+  account.totpEnabled = false
+  account.totpSecret = null
+  account.totpPendingSecret = null
+  account.totpRecoveryHashes = []
+  await writeStore(store)
+  return res.json({ account: publicAccount(account) })
+})
+
+app.get('/api/auth/2fa/status', async (req, res) => {
+  const ctx = await requireAccountOrSetup(req, res)
+  if (!ctx) return
+  const policy = companyTwoFactorPolicy(ctx.store)
+  return res.json({
+    ...publicTotpStatus(ctx.account),
+    policy,
+    required: policyRequiresTwoFactor(policy, ctx.account.role),
+    pendingSetup: ctx.session.kind === 'pending_2fa_setup',
+  })
+})
+
+app.get('/api/recovery/accounts', async (req, res) => {
   if (!requireRecovery(req, res)) return
-  const store = readStore()
+  const store = await readStore()
   res.json({ accounts: store.accounts.map(publicAccount) })
 })
 
@@ -331,7 +546,7 @@ app.post('/api/recovery/accounts', async (req, res) => {
     return res.status(400).json({ error: 'That login is reserved for master recovery' })
   }
 
-  const store = readStore()
+  const store = await readStore()
   if (store.accounts.some((item) => item.email === email)) {
     return res.status(409).json({ error: 'An account with that email already exists' })
   }
@@ -355,14 +570,14 @@ app.post('/api/recovery/accounts', async (req, res) => {
     passwordHash,
   }
   store.accounts.push(account)
-  writeStore(store)
+  await writeStore(store)
   return res.status(201).json({ account: publicAccount(account) })
 })
 
 app.patch('/api/recovery/accounts/:id', async (req, res) => {
   if (!requireRecovery(req, res)) return
   const id = Number(req.params.id)
-  const store = readStore()
+  const store = await readStore()
   const account = store.accounts.find((item) => item.id === id)
   if (!account) return res.status(404).json({ error: 'Account not found' })
 
@@ -382,12 +597,12 @@ app.patch('/api/recovery/accounts/:id', async (req, res) => {
     account.passwordHash = await bcrypt.hash(req.body.password, BCRYPT_ROUNDS)
   }
 
-  writeStore(store)
+  await writeStore(store)
   return res.json({ account: publicAccount(account) })
 })
 
-app.get('/api/app-data', (req, res) => {
-  const ctx = requireAccount(req, res)
+app.get('/api/app-data', async (req, res) => {
+  const ctx = await requireAccount(req, res)
   if (!ctx) return
   const { store } = ctx
   res.json({
@@ -396,8 +611,8 @@ app.get('/api/app-data', (req, res) => {
   })
 })
 
-app.put('/api/app-data', (req, res) => {
-  const ctx = requireAccount(req, res)
+app.put('/api/app-data', async (req, res) => {
+  const ctx = await requireAccount(req, res)
   if (!ctx) return
   const { account, store } = ctx
   if (account.role !== 'admin' && !req.body?._allowEmployeeSave) {
@@ -422,12 +637,12 @@ app.put('/api/app-data', (req, res) => {
       ...appData.company,
     },
   }
-  writeStore(store)
+  await writeStore(store)
   res.json({ ok: true })
 })
 
 app.post('/api/accounts', async (req, res) => {
-  const ctx = requireAccount(req, res)
+  const ctx = await requireAccount(req, res)
   if (!ctx) return
   const { account: actor, store } = ctx
   if (actor.role !== 'admin') {
@@ -472,12 +687,12 @@ app.post('/api/accounts', async (req, res) => {
     passwordHash,
   }
   store.accounts.push(created)
-  writeStore(store)
+  await writeStore(store)
   res.status(201).json({ account: publicAccount(created) })
 })
 
 app.patch('/api/accounts/:id', async (req, res) => {
-  const ctx = requireAccount(req, res)
+  const ctx = await requireAccount(req, res)
   if (!ctx) return
   const { account: actor, store } = ctx
   if (actor.role !== 'admin') {
@@ -548,12 +763,12 @@ app.patch('/api/accounts/:id', async (req, res) => {
     target.jobTitle = req.body.jobTitle
   }
 
-  writeStore(store)
+  await writeStore(store)
   res.json({ account: publicAccount(target), accounts: store.accounts.map(publicAccount) })
 })
 
 app.post('/api/auth/verify-password', async (req, res) => {
-  const ctx = requireAccount(req, res)
+  const ctx = await requireAccount(req, res)
   if (!ctx) return
   const password = String(req.body?.password || '')
   const ok = await bcrypt.compare(password, ctx.account.passwordHash)
@@ -561,15 +776,121 @@ app.post('/api/auth/verify-password', async (req, res) => {
   res.json({ ok: true })
 })
 
-ensureStore()
-;(() => {
-  const store = readStore()
-  const hasDemo = store.accounts.some((item) => String(item.email || '').endsWith('@northstar.demo'))
-  if (hasDemo) {
-    writeStore(defaultStore())
-    console.log('Wiped legacy demo accounts and app data')
+app.get('/api/notifications/status', async (req, res) => {
+  const ctx = await requireAccount(req, res)
+  if (!ctx) return
+  res.json(mailStatusPublic())
+})
+
+app.post('/api/notifications/dispatch', async (req, res) => {
+  const ctx = await requireAccount(req, res)
+  if (!ctx) return
+  const { account, store } = ctx
+  const eventId = String(req.body?.eventId || '').trim()
+  const employeeId =
+    req.body?.employeeId === null || req.body?.employeeId === undefined || req.body?.employeeId === ''
+      ? null
+      : Number(req.body.employeeId)
+  const details =
+    req.body?.details && typeof req.body.details === 'object' && !Array.isArray(req.body.details)
+      ? req.body.details
+      : {}
+
+  const result = await dispatchNotificationEmail({
+    store,
+    actor: account,
+    eventId,
+    employeeId,
+    details,
+  })
+
+  if (result.ok) {
+    return res.json({
+      sent: true,
+      recipients: result.recipients?.length ?? 0,
+      subject: result.subject,
+    })
   }
-})()
+
+  if (result.reason === 'forbidden') {
+    return res.status(403).json({
+      sent: false,
+      reason: result.reason,
+      message: reasonMessage(result.reason),
+    })
+  }
+  if (result.reason === 'invalid_event') {
+    return res.status(400).json({
+      sent: false,
+      reason: result.reason,
+      message: reasonMessage(result.reason),
+    })
+  }
+
+  return res.json({
+    sent: false,
+    reason: result.reason,
+    message: result.error || reasonMessage(result.reason),
+  })
+})
+
+app.post('/api/notifications/payroll-report', async (req, res) => {
+  const ctx = await requireAccount(req, res)
+  if (!ctx) return
+  const { account, store } = ctx
+  if (account.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can email payroll reports' })
+  }
+
+  const company = store.appData?.company || {}
+  const to = String(req.body?.to || company.payrollEmail || '')
+    .trim()
+    .toLowerCase()
+  const subject = String(req.body?.subject || 'Finch payroll report').trim()
+  const text = String(req.body?.text || '').trim()
+  const csv = String(req.body?.csv || '')
+  const filename = String(req.body?.filename || 'payroll-report.csv').trim() || 'payroll-report.csv'
+
+  if (!to) {
+    return res.status(400).json({ error: 'Set a payroll email address in Settings first' })
+  }
+  if (!csv) {
+    return res.status(400).json({ error: 'Report CSV is required' })
+  }
+
+  try {
+    const result = await sendMail({
+      to,
+      subject,
+      text:
+        text ||
+        [
+          'Payroll notice: Finch records absences and working time only.',
+          'It does not calculate Statutory Sick Pay (SSP), holiday pay, or other statutory amounts.',
+          '',
+          'The CSV report is attached.',
+        ].join('\n'),
+      attachments: [
+        {
+          filename,
+          content: csv,
+          contentType: 'text/csv',
+        },
+      ],
+    })
+    if (!result.ok) {
+      const status = result.reason === 'smtp_not_configured' ? 503 : 400
+      return res.status(status).json({
+        error: reasonMessage(result.reason),
+        reason: result.reason,
+      })
+    }
+    return res.json({ sent: true, to })
+  } catch (error) {
+    console.error('Payroll email failed:', error?.message || error)
+    return res.status(502).json({ error: String(error?.message || 'Failed to send payroll email') })
+  }
+})
 
 const distDir = path.join(ROOT, 'dist')
 if (fs.existsSync(distDir)) {
@@ -579,6 +900,31 @@ if (fs.existsSync(distDir)) {
   })
 }
 
-app.listen(PORT, () => {
-  console.log(`Finch API listening on http://localhost:${PORT}`)
+async function boot() {
+  await initStore()
+  const store = await readStore()
+  const hasDemo = store.accounts.some((item) => String(item.email || '').endsWith('@northstar.demo'))
+  if (hasDemo) {
+    await writeStore(defaultStore())
+    console.log('Wiped legacy demo accounts and app data')
+  }
+
+  const server = app.listen(PORT, () => {
+    console.log(`Finch API listening on http://localhost:${PORT} (${getStoreBackend()})`)
+  })
+
+  const shutdown = async (signal) => {
+    console.log(`Received ${signal}, shutting down`)
+    server.close(async () => {
+      await closeStore()
+      process.exit(0)
+    })
+  }
+  process.on('SIGINT', () => void shutdown('SIGINT'))
+  process.on('SIGTERM', () => void shutdown('SIGTERM'))
+}
+
+boot().catch((error) => {
+  console.error('Failed to start Finch:', error)
+  process.exit(1)
 })

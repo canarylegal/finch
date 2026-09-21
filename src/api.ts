@@ -37,6 +37,8 @@ export type PublicAccount = {
   status: 'Active' | 'Inactive'
   jobTitle?: string
   isPrimary?: boolean
+  totpEnabled?: boolean
+  recoveryCodesRemaining?: number
 }
 
 export async function fetchBootstrap() {
@@ -50,12 +52,61 @@ export async function fetchBootstrap() {
 
 export async function loginWithPassword(email: string, password: string) {
   return api<
-    | { account: PublicAccount; recovery?: undefined }
+    | { account: PublicAccount; recovery?: undefined; requires2fa?: undefined; mustSetup2fa?: undefined }
     | { recovery: true; displayName: string; hasAccounts: boolean; account?: undefined }
+    | {
+        requires2fa: true
+        challenge: 'account' | 'master'
+        account?: PublicAccount
+        displayName?: string
+        hasAccounts?: boolean
+      }
+    | { mustSetup2fa: true; account: PublicAccount }
   >('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   })
+}
+
+export async function verifyTwoFactorCode(code: string) {
+  return api<
+    | { account: PublicAccount; recovery?: undefined }
+    | { recovery: true; displayName: string; hasAccounts: boolean }
+  >('/api/auth/2fa/verify', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  })
+}
+
+export async function setupTwoFactor() {
+  return api<{ secret: string; uri: string; qrDataUrl: string }>('/api/auth/2fa/setup', {
+    method: 'POST',
+    body: '{}',
+  })
+}
+
+export async function confirmTwoFactor(code: string) {
+  return api<{ account: PublicAccount; recoveryCodes: string[] }>('/api/auth/2fa/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  })
+}
+
+export async function disableTwoFactor(password: string, code: string) {
+  return api<{ account: PublicAccount }>('/api/auth/2fa/disable', {
+    method: 'POST',
+    body: JSON.stringify({ password, code }),
+  })
+}
+
+export async function fetchTwoFactorStatus() {
+  return api<{
+    totpEnabled: boolean
+    recoveryCodesRemaining: number
+    policy: 'all' | 'admins' | 'optional'
+    required: boolean
+    pendingSetup: boolean
+  }>('/api/auth/2fa/status')
 }
 
 export async function logoutRequest() {
@@ -71,6 +122,17 @@ export async function fetchMe() {
       }
     | {
         kind: 'master_recovery'
+        displayName: string
+        hasAccounts: boolean
+        orgConfigured: boolean
+      }
+    | {
+        kind: 'pending_2fa' | 'pending_2fa_setup'
+        account: PublicAccount
+        orgConfigured: boolean
+      }
+    | {
+        kind: 'pending_2fa_master'
         displayName: string
         hasAccounts: boolean
         orgConfigured: boolean
@@ -141,5 +203,39 @@ export async function verifyPasswordRequest(password: string) {
   return api<{ ok: true }>('/api/auth/verify-password', {
     method: 'POST',
     body: JSON.stringify({ password }),
+  })
+}
+
+export async function fetchNotificationStatus() {
+  return api<{ configured: boolean; from: string | null }>('/api/notifications/status')
+}
+
+export async function dispatchNotificationRequest(payload: {
+  eventId: string
+  employeeId?: number | null
+  details?: Record<string, string | undefined>
+}) {
+  return api<{
+    sent: boolean
+    recipients?: number
+    subject?: string
+    reason?: string
+    message?: string
+  }>('/api/notifications/dispatch', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function emailPayrollReportRequest(payload: {
+  to?: string
+  subject?: string
+  text?: string
+  csv: string
+  filename?: string
+}) {
+  return api<{ sent: true; to: string }>('/api/notifications/payroll-report', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }

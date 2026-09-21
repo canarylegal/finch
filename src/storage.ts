@@ -129,6 +129,7 @@ export type StoredCompanySettings = {
   leaveYearStart: string
   leaveYearEnd: string
   leaveYearConfigured?: boolean
+  leaveYearConfiguredAt?: string | null
   mandatoryLeaveConfirmations?: {
     leaveYearKey: string
     noneThisYear: boolean
@@ -146,8 +147,10 @@ export type StoredCompanySettings = {
   payrollEmail: string
   autoSendPayrollReport: boolean
   autoSendDayOfMonth: number
+  lastAutoPayrollSentPeriodEnd?: string | null
   payPeriodStartDay: number
   bankHolidayRegion: BankHolidayRegion
+  adminsCanApproveOwnRequests?: boolean
 }
 
 export type StoredLeaveAdjustment = {
@@ -209,6 +212,7 @@ export type FinchAppData = {
   preferAdminView?: boolean
   accounts?: StoredAccount[]
   expenseClaims?: StoredExpenseClaim[]
+  vatReceipts?: import('./vatReceipts').VatReceipt[]
   taskDismissals?: StoredTaskDismissal[]
   policies?: StoredPolicyDocument[]
   leaveAdjustments?: StoredLeaveAdjustment[]

@@ -92,6 +92,8 @@ export type CompanySettings = {
   leaveYearEnd: string
   /** Explicitly confirmed by admin — not inferred from Jan–Dec defaults */
   leaveYearConfigured: boolean
+  /** ISO date when leave year was first confirmed; periods ending before this are not prompted for close */
+  leaveYearConfiguredAt: string | null
   mandatoryLeaveConfirmations: MandatoryLeaveConfirmation[]
   defaultRollOver: boolean
   defaultEntitlement: number
@@ -104,8 +106,15 @@ export type CompanySettings = {
   payrollEmail: string
   autoSendPayrollReport: boolean
   autoSendDayOfMonth: number
+  /** ISO end date of the last pay period auto-emailed (dedupe). */
+  lastAutoPayrollSentPeriodEnd: string | null
   payPeriodStartDay: number
   bankHolidayRegion: BankHolidayRegion
+  /**
+   * When false (default), non-primary admins cannot approve/decline their own
+   * leave or expense requests. Primary admins are always allowed.
+   */
+  adminsCanApproveOwnRequests: boolean
 }
 
 export type MenuItem = {
@@ -180,7 +189,12 @@ export type PolicyDocument = {
   accent: PolicyAccent
 }
 
-export const APP_TODAY = new Date(2026, 7, 31)
+/** Local calendar “today” (midnight) for date-only app logic. */
+export function appToday(): Date {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+}
+
 export const AVATAR_COLORS = ['sage', 'peach', 'lavender', 'mint'] as const
 
 export const initialEmployees: Employee[] = [
@@ -415,6 +429,7 @@ export const adminNavItems = [
   { label: 'Absences', icon: HeartPulse },
   { label: 'Team calendar', icon: CalendarDays },
   { label: 'Payroll reports', icon: ScrollText },
+  { label: 'VAT receipts', icon: Receipt },
   { label: 'Leave years', icon: History },
   { label: 'Employees', icon: Users },
   { label: 'Policies', icon: BookOpen },
@@ -427,6 +442,7 @@ export const defaultCompanySettings: CompanySettings = {
   leaveYearStart: 'January',
   leaveYearEnd: 'December',
   leaveYearConfigured: false,
+  leaveYearConfiguredAt: null,
   mandatoryLeaveConfirmations: [],
   defaultRollOver: false,
   defaultEntitlement: 25,
@@ -439,8 +455,10 @@ export const defaultCompanySettings: CompanySettings = {
   payrollEmail: '',
   autoSendPayrollReport: false,
   autoSendDayOfMonth: 3,
+  lastAutoPayrollSentPeriodEnd: null,
   payPeriodStartDay: 10,
   bankHolidayRegion: 'england-wales',
+  adminsCanApproveOwnRequests: false,
 }
 
 export function companyInitials(name: string) {
@@ -539,7 +557,10 @@ export function readPersistedState() {
       stored.company.entitlementIncludesBankHolidays ?? defaultCompanySettings.entitlementIncludesBankHolidays,
     notificationEvents: normalizeNotificationEvents(stored.company.notificationEvents),
     leaveYearConfigured: stored.company.leaveYearConfigured ?? false,
+    leaveYearConfiguredAt: stored.company.leaveYearConfiguredAt ?? null,
     mandatoryLeaveConfirmations: stored.company.mandatoryLeaveConfirmations ?? [],
+    adminsCanApproveOwnRequests: stored.company.adminsCanApproveOwnRequests ?? false,
+    lastAutoPayrollSentPeriodEnd: stored.company.lastAutoPayrollSentPeriodEnd ?? null,
   }
   const migrated = migrateDocumentsToFolders(
     stored.employees,
@@ -587,6 +608,7 @@ export function readPersistedState() {
     ),
     accounts: (stored.accounts as Account[] | undefined) ?? [],
     expenseClaims: stored.expenseClaims,
+    vatReceipts: stored.vatReceipts ?? [],
     taskDismissals: stored.taskDismissals ?? [],
     policies: stored.policies,
     leaveAdjustments: stored.leaveAdjustments ?? [],

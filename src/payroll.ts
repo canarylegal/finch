@@ -169,17 +169,53 @@ export function countWorkingDaysInRange(
   start: string,
   end: string,
   workingDays: number[] = [...DEFAULT_WORKING_DAYS],
+  excludeDates?: Iterable<string>,
 ) {
   if (!start || !end || end < start) return 0
   const pattern = normalizeWorkingDays(workingDays)
+  const excluded = excludeDates ? new Set(excludeDates) : null
   let count = 0
   const cursor = parseIsoDate(start)
   const last = parseIsoDate(end)
   while (cursor <= last) {
-    if (pattern.includes(cursor.getDay())) count += 1
+    const iso = toIsoDate(cursor)
+    if ((!excluded || !excluded.has(iso)) && pattern.includes(cursor.getDay())) {
+      count += 1
+    }
     cursor.setDate(cursor.getDate() + 1)
   }
   return count
+}
+
+/** Split an inclusive date range into contiguous segments that omit excluded dates. */
+export function splitRangeExcludingDates(
+  start: string,
+  end: string,
+  excludeDates: Iterable<string>,
+): { start: string; end: string }[] {
+  if (!start || !end || end < start) return []
+  const excluded = new Set(excludeDates)
+  const segments: { start: string; end: string }[] = []
+  let segmentStart: string | null = null
+  let segmentEnd: string | null = null
+  const cursor = parseIsoDate(start)
+  const last = parseIsoDate(end)
+  while (cursor <= last) {
+    const iso = toIsoDate(cursor)
+    if (!excluded.has(iso)) {
+      if (segmentStart == null) segmentStart = iso
+      segmentEnd = iso
+    } else if (segmentStart != null && segmentEnd != null) {
+      segments.push({ start: segmentStart, end: segmentEnd })
+      segmentStart = null
+      segmentEnd = null
+    }
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  if (segmentStart != null && segmentEnd != null) {
+    segments.push({ start: segmentStart, end: segmentEnd })
+  }
+  return segments
 }
 
 export function countWeekdaysInRange(start: string, end: string) {
@@ -458,6 +494,116 @@ export function payrollReportToCsv(rows: PayrollReportRow[]) {
     ].join(','),
   )
   return [PAYROLL_DISCLAIMER, '', headers.join(','), ...lines].join('\n')
+}
+
+export function payrollReportToEmailBody(
+  rows: PayrollReportRow[],
+  options: { companyName?: string; periodLabel: string },
+) {
+  const totals = rows.reduce(
+    (acc, row) => ({
+      daysWorked: acc.daysWorked + row.daysWorked,
+      annualLeaveDays: acc.annualLeaveDays + row.annualLeaveDays,
+      sickPaidDays: acc.sickPaidDays + row.sickPaidDays,
+      sickUnpaidDays: acc.sickUnpaidDays + row.sickUnpaidDays,
+      maternityDays: acc.maternityDays + row.maternityDays,
+      bankHolidayDays: acc.bankHolidayDays + row.bankHolidayDays,
+      unpaidLeaveDays: acc.unpaidLeaveDays + row.unpaidLeaveDays,
+    }),
+    {
+      daysWorked: 0,
+      annualLeaveDays: 0,
+      sickPaidDays: 0,
+      sickUnpaidDays: 0,
+      maternityDays: 0,
+      bankHolidayDays: 0,
+      unpaidLeaveDays: 0,
+    },
+  )
+
+  const companyLine = options.companyName?.trim()
+    ? `Organisation: ${options.companyName.trim()}`
+    : null
+
+  const summaryLines = [
+    PAYROLL_DISCLAIMER,
+    '',
+    companyLine,
+    `Pay period: ${options.periodLabel}`,
+    `Employees in report: ${rows.length}`,
+    '',
+    'Totals',
+    `- Days worked: ${totals.daysWorked}`,
+    `- Annual leave: ${totals.annualLeaveDays}`,
+    `- Sick leave (paid): ${totals.sickPaidDays}`,
+    `- Sick leave (unpaid): ${totals.sickUnpaidDays}`,
+    `- Maternity leave: ${totals.maternityDays}`,
+    `- Bank holidays: ${totals.bankHolidayDays}`,
+    `- Unpaid leave: ${totals.unpaidLeaveDays}`,
+    '',
+    'Per employee',
+    ...rows.map((row) => {
+      const parts = [
+        `${row.employeeName}: ${row.daysWorked} worked`,
+        row.annualLeaveDays ? `${row.annualLeaveDays} annual` : null,
+        row.sickPaidDays ? `${row.sickPaidDays} sick paid` : null,
+        row.sickUnpaidDays ? `${row.sickUnpaidDays} sick unpaid` : null,
+        row.maternityDays ? `${row.maternityDays} maternity` : null,
+        row.bankHolidayDays ? `${row.bankHolidayDays} BH` : null,
+        row.unpaidLeaveDays ? `${row.unpaidLeaveDays} unpaid` : null,
+        row.adjustments ? `adj: ${row.adjustments}` : null,
+      ].filter(Boolean)
+      return `- ${parts.join(', ')}`
+    }),
+    '',
+    'Full detail is in the attached CSV.',
+  ].filter((line) => line !== null)
+
+  return summaryLines.join('\n')
+}
+
+function addDaysIso(iso: string, days: number) {
+  const date = parseIsoDate(iso)
+  date.setDate(date.getDate() + days)
+  return toIsoDate(date)
+}
+
+/** Most recently completed pay period relative to today (by period end date). */
+export function mostRecentlyEndedPayPeriod(
+  payPeriodStartDay: number,
+  today: Date = new Date(),
+) {
+  const todayIso = toIsoDate(today)
+  for (let offset = 0; offset <= 3; offset += 1) {
+    const cursor = new Date(today.getFullYear(), today.getMonth() - offset, 1)
+    const period = getPayPeriodForEndMonth(
+      payPeriodStartDay,
+      cursor.getFullYear(),
+      cursor.getMonth(),
+    )
+    if (period.end < todayIso) return period
+  }
+  return null
+}
+
+export function dueAutoPayrollPeriod(
+  company: {
+    autoSendPayrollReport: boolean
+    autoSendDayOfMonth: number
+    payPeriodStartDay: number
+    payrollEmail: string
+    lastAutoPayrollSentPeriodEnd?: string | null
+  },
+  today: Date = new Date(),
+) {
+  if (!company.autoSendPayrollReport) return null
+  if (!company.payrollEmail?.trim()) return null
+  const period = mostRecentlyEndedPayPeriod(company.payPeriodStartDay, today)
+  if (!period) return null
+  if (company.lastAutoPayrollSentPeriodEnd === period.end) return null
+  const sendOn = addDaysIso(period.end, Math.max(0, company.autoSendDayOfMonth || 0))
+  if (toIsoDate(today) < sendOn) return null
+  return period
 }
 
 export function absenceTypeColor(type: AbsenceType): 'coral' | 'lavender' | 'mint' | 'yellow' {

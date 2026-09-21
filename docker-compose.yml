@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-finch}
+      POSTGRES_USER: ${POSTGRES_USER:-finch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-finch}
+    volumes:
+      - finch_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+      TRUST_PROXY: '1'
+      COOKIE_SECURE: 'true'
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env (use host db, e.g. postgres://finch:PASSWORD@db:5432/finch)}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - finch_data:/app/data
+    expose:
+      - '8787'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      FINCH_DOMAIN: ${FINCH_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+  backup:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env (use host db, e.g. postgres://finch:PASSWORD@db:5432/finch)}
+      BACKUP_DIR: /app/data/backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    command: ['node', 'scripts/backup-loop.mjs']
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - finch_data:/app/data
+
+volumes:
+  finch_pg:
+  finch_data:
+  caddy_data:
+  caddy_config:
