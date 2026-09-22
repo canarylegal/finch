@@ -11,6 +11,10 @@ export type AuditAction =
   | 'auth.totp.disabled'
   | 'auth.passkey.added'
   | 'auth.passkey.removed'
+  | 'auth.password.changed'
+  | 'auth.password.reset_email'
+  | 'recovery.account.updated'
+  | 'recovery.account.deleted'
 
 export type AuditEvent = {
   id: string
@@ -129,6 +133,14 @@ export function auditActionLabel(action: AuditAction | string) {
       return 'Passkey added'
     case 'auth.passkey.removed':
       return 'Passkey removed'
+    case 'auth.password.changed':
+      return 'Password changed'
+    case 'auth.password.reset_email':
+      return 'Password reset emailed'
+    case 'recovery.account.updated':
+      return 'Recovery account update'
+    case 'recovery.account.deleted':
+      return 'Recovery account deleted'
     default:
       return action
   }

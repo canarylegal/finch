@@ -128,7 +128,7 @@ After `docker compose up -d --build` on a VPS:
 
 1. Open `https://$FINCH_DOMAIN` and confirm HTTPS (Caddy).
 2. Master recovery login works; create/sign-in as admin with 2FA as required by policy (passkey or authenticator).
-3. Settings → Security: add a passkey, sign out, sign in with password + passkey.
+3. Settings → Security: change password; add a passkey; sign out; sign in with password + passkey / authenticator.
 4. Submit a leave request as an employee → approve as admin → balances/calendar update.
 5. Submit an expense claim with a receipt → approve/reject.
 6. Admin → Payroll reports: download CSV for the current period.
@@ -136,3 +136,5 @@ After `docker compose up -d --build` on a VPS:
 8. With SMTP set: trigger a notification and confirm delivery (or check server logs if skipped).
 9. Confirm a backup file appears under the data volume (`/app/data/backups` in the `backup` service).
 10. Optional: restore a dump into a spare database once before relying on backups.
+
+Full automated + UI checklist: [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). Run API tests with `npm test`.

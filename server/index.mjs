@@ -23,6 +23,7 @@ import {
   getStoreBackend,
   initStore,
   readStore,
+  updateStore,
   writeStore,
 } from './store.mjs'
 import {
@@ -40,6 +41,17 @@ import {
   createAuditEvent,
   mergeAuditEvents,
 } from './audit.mjs'
+import {
+  accountHasPasskey,
+  accountHasSecondFactor,
+  createAuthenticationOptions,
+  createRegistrationOptions,
+  publicPasskeyStatus,
+  removePasskey,
+  resolveWebAuthnConfig,
+  verifyAndStoreRegistration,
+  verifyAuthentication,
+} from './webauthn.mjs'
 
 dotenv.config()
 
@@ -193,6 +205,24 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many sign-in attempts. Try again later.' },
 })
 
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.FORGOT_PASSWORD_RATE_LIMIT || 5),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many password reset requests. Try again later.' },
+})
+
+function generateTemporaryPassword(length = 16) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%'
+  const bytes = crypto.randomBytes(length)
+  let out = ''
+  for (let i = 0; i < length; i += 1) {
+    out += alphabet[bytes[i] % alphabet.length]
+  }
+  return out
+}
+
 app.get('/api/health', async (_req, res) => {
   try {
     await readStore()
@@ -216,6 +246,92 @@ app.get('/api/bootstrap', async (req, res) => {
         }
       : null,
   })
+})
+
+app.post('/api/auth/forgot-password', forgotPasswordLimiter, async (req, res) => {
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase()
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' })
+  }
+
+  const generic = {
+    ok: true,
+    message:
+      'If an account exists for that email, a temporary password has been sent. Check your inbox.',
+  }
+
+  // Never reset the env master recovery login via this flow.
+  if (timingSafeEqualString(email, masterConfig.login)) {
+    return res.json(generic)
+  }
+
+  const smtp = mailStatusPublic()
+  if (!smtp.configured) {
+    return res.status(503).json({
+      error: 'Email is not configured on this server. Contact an admin to reset your password.',
+    })
+  }
+
+  const store = await readStore()
+  const account = store.accounts.find((item) => item.email === email)
+  if (!account || account.status !== 'Active') {
+    return res.json(generic)
+  }
+
+  const temporaryPassword = generateTemporaryPassword()
+  const passwordHash = await bcrypt.hash(temporaryPassword, BCRYPT_ROUNDS)
+
+  const orgName = store.appData?.company?.name?.trim() || 'Finch'
+  const hasMfa = accountHasSecondFactor(account)
+  const lines = [
+    `A temporary password was created for your ${orgName} Finch account.`,
+    '',
+    `Email: ${account.email}`,
+    `Temporary password: ${temporaryPassword}`,
+    '',
+    'Sign in with this temporary password.',
+  ]
+  if (hasMfa) {
+    lines.push(
+      '',
+      'If you still have your authenticator or passkey, use it after signing in as usual.',
+      'If you have lost access to two-factor authentication, contact your organisation admin — they can clear MFA so you can enrol again.',
+    )
+  } else {
+    lines.push(
+      '',
+      'If your organisation requires two-factor authentication and you cannot complete sign-in, contact your organisation admin.',
+    )
+  }
+  lines.push('', 'If you did not request this reset, contact an admin immediately.')
+
+  const mailed = await sendMail({
+    to: account.email,
+    subject: `${orgName} — temporary password`,
+    text: lines.join('\n'),
+  })
+  if (!mailed.ok) {
+    return res.status(503).json({
+      error: 'Could not send the reset email. Contact an admin, or try again later.',
+    })
+  }
+
+  account.passwordHash = passwordHash
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'auth.password.reset_email',
+      summary: `${account.displayName || account.email} requested a temporary password by email`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
+  await writeStore(store)
+  return res.json(generic)
 })
 
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
@@ -668,6 +784,56 @@ app.post('/api/auth/webauthn/authenticate/verify', twoFactorLimiter, async (req,
   return res.json({ account: publicAccount(account) })
 })
 
+app.post('/api/auth/webauthn/login/options', twoFactorLimiter, async (req, res) => {
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase()
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' })
+  }
+  const store = await readStore()
+  const account = store.accounts.find((item) => item.email === email)
+  if (!account || account.status !== 'Active' || !accountHasPasskey(account)) {
+    return res.status(401).json({ error: 'Passkey sign-in is not available for that email' })
+  }
+  const config = resolveWebAuthnConfig({
+    req,
+    companyName: store.appData?.company?.name,
+  })
+  const result = await createAuthenticationOptions({ account, config })
+  if (!result.ok) return res.status(400).json({ error: result.error })
+  return res.json(result.options)
+})
+
+app.post('/api/auth/webauthn/login/verify', twoFactorLimiter, async (req, res) => {
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase()
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' })
+  }
+  const store = await readStore()
+  const account = store.accounts.find((item) => item.email === email)
+  if (!account || account.status !== 'Active') {
+    return res.status(401).json({ error: 'Passkey sign-in failed' })
+  }
+  const config = resolveWebAuthnConfig({
+    req,
+    companyName: store.appData?.company?.name,
+  })
+  const result = await verifyAuthentication({
+    account,
+    response: req.body?.credential || req.body,
+    config,
+  })
+  if (!result.ok) return res.status(401).json({ error: result.error })
+  await writeStore(store)
+
+  const token = signToken({ kind: 'account', accountId: account.id })
+  setSessionCookie(res, token)
+  return res.json({ account: publicAccount(account) })
+})
+
 app.post('/api/auth/webauthn/credentials/remove', async (req, res) => {
   const ctx = await requireAccount(req, res)
   if (!ctx) return
@@ -771,24 +937,90 @@ app.patch('/api/recovery/accounts/:id', async (req, res) => {
   const account = store.accounts.find((item) => item.id === id)
   if (!account) return res.status(404).json({ error: 'Account not found' })
 
+  const changes = []
+
   if (typeof req.body?.status === 'string') {
     account.status = req.body.status === 'Inactive' ? 'Inactive' : 'Active'
+    changes.push(`status=${account.status}`)
   }
   if (req.body?.role === 'admin' || req.body?.role === 'employee') {
     account.role = req.body.role
     if (account.role === 'employee') account.isPrimary = false
+    changes.push(`role=${account.role}`)
   }
   if (req.body?.isPrimary === true) {
     for (const item of store.accounts) item.isPrimary = item.id === account.id
     account.role = 'admin'
     account.status = 'Active'
+    changes.push('made-primary')
   }
-  if (typeof req.body?.password === 'string' && req.body.password.length >= 10) {
+  if (typeof req.body?.password === 'string') {
+    if (req.body.password.length < 10) {
+      return res.status(400).json({ error: 'Password must be at least 10 characters' })
+    }
     account.passwordHash = await bcrypt.hash(req.body.password, BCRYPT_ROUNDS)
+    changes.push('password-reset')
+  }
+  if (req.body?.clearTwoFactor === true) {
+    account.totpEnabled = false
+    account.totpSecret = null
+    account.totpPendingSecret = null
+    account.totpRecoveryHashes = []
+    changes.push('2fa-cleared')
+  }
+  if (req.body?.clearPasskeys === true) {
+    account.webauthnCredentials = []
+    changes.push('passkeys-cleared')
   }
 
+  if (changes.length === 0) {
+    return res.status(400).json({ error: 'No recovery changes provided' })
+  }
+
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorName: 'Master recovery',
+      action: 'recovery.account.updated',
+      summary: `Master recovery updated ${account.displayName || account.email} (${changes.join(', ')})`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
   await writeStore(store)
   return res.json({ account: publicAccount(account) })
+})
+
+app.delete('/api/recovery/accounts/:id', async (req, res) => {
+  if (!requireRecovery(req, res)) return
+  const id = Number(req.params.id)
+  const store = await readStore()
+  const index = store.accounts.findIndex((item) => item.id === id)
+  if (index < 0) return res.status(404).json({ error: 'Account not found' })
+
+  const [removed] = store.accounts.splice(index, 1)
+  if (removed.isPrimary && store.accounts.length > 0) {
+    const nextPrimary =
+      store.accounts.find((item) => item.role === 'admin' && item.status === 'Active') ||
+      store.accounts.find((item) => item.role === 'admin') ||
+      store.accounts[0]
+    for (const item of store.accounts) item.isPrimary = item.id === nextPrimary.id
+    nextPrimary.role = 'admin'
+    nextPrimary.status = 'Active'
+  }
+
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorName: 'Master recovery',
+      action: 'recovery.account.deleted',
+      summary: `Master recovery deleted ${removed.displayName || removed.email}`,
+      entityType: 'account',
+      entityId: removed.id,
+    }),
+  )
+  await writeStore(store)
+  return res.json({ ok: true, deletedId: removed.id })
 })
 
 app.get('/api/app-data', async (req, res) => {
@@ -804,7 +1036,7 @@ app.get('/api/app-data', async (req, res) => {
 app.put('/api/app-data', async (req, res) => {
   const ctx = await requireAccount(req, res)
   if (!ctx) return
-  const { account, store } = ctx
+  const { account } = ctx
   if (account.role !== 'admin' && !req.body?._allowEmployeeSave) {
     // Employees can still persist leave/expenses — allow all authenticated users to save app data
   }
@@ -832,21 +1064,26 @@ app.put('/api/app-data', async (req, res) => {
       )
     : []
 
-  const mergedAudit = mergeAuditEvents(
-    mergeAuditEvents(store.appData?.auditEvents, appData.auditEvents),
-    stampedAppend,
-  )
+  const mergedAudit = await updateStore((store) => {
+    // Re-read under the store gate: merge server truth + client snapshot + explicit appends.
+    // Client snapshots may lag concurrent saves; merge-by-id never deletes server events.
+    const nextAudit = mergeAuditEvents(
+      mergeAuditEvents(store.appData?.auditEvents, appData.auditEvents),
+      stampedAppend,
+    )
 
-  store.appData = {
-    ...emptyAppData(),
-    ...appData,
-    company: {
-      ...emptyCompany(),
-      ...appData.company,
-    },
-    auditEvents: mergedAudit,
-  }
-  await writeStore(store)
+    store.appData = {
+      ...emptyAppData(),
+      ...appData,
+      company: {
+        ...emptyCompany(),
+        ...appData.company,
+      },
+      auditEvents: nextAudit,
+    }
+    return nextAudit
+  })
+
   res.json({ ok: true, auditEvents: mergedAudit })
 })
 
@@ -1007,6 +1244,42 @@ app.post('/api/auth/verify-password', async (req, res) => {
   res.json({ ok: true })
 })
 
+app.post('/api/auth/change-password', async (req, res) => {
+  const ctx = await requireAccount(req, res)
+  if (!ctx) return
+  const { account, store } = ctx
+  const currentPassword = String(req.body?.currentPassword || '')
+  const newPassword = String(req.body?.newPassword || '')
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current and new password are required' })
+  }
+  if (newPassword.length < 10) {
+    return res.status(400).json({ error: 'New password must be at least 10 characters' })
+  }
+  if (currentPassword === newPassword) {
+    return res.status(400).json({ error: 'New password must be different from the current password' })
+  }
+
+  const ok = await bcrypt.compare(currentPassword, account.passwordHash)
+  if (!ok) return res.status(401).json({ error: 'Current password is incorrect' })
+
+  account.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS)
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'auth.password.changed',
+      summary: `${account.displayName || account.email} changed their password`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
+  await writeStore(store)
+  return res.json({ ok: true })
+})
+
 app.get('/api/notifications/status', async (req, res) => {
   const ctx = await requireAccount(req, res)
   if (!ctx) return
@@ -1155,7 +1428,14 @@ async function boot() {
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
-boot().catch((error) => {
-  console.error('Failed to start Finch:', error)
-  process.exit(1)
-})
+const isDirectRun =
+  Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+
+if (isDirectRun) {
+  boot().catch((error) => {
+    console.error('Failed to start Finch:', error)
+    process.exit(1)
+  })
+}
+
+export { app, boot }

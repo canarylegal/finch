@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { EntitlementBasisNote } from '../components/EntitlementBasisNote'
 import { PageHeader } from '../components/PageHeader'
@@ -22,6 +22,7 @@ import {
 import { formatLeaveYearLabel, type LeaveYearPeriod } from '../leaveYear'
 import { NOTIFICATION_EVENT_IDS, NOTIFICATION_EVENT_LABELS } from '../notifications'
 import {
+  changePasswordRequest,
   confirmTwoFactor,
   disableTwoFactor,
   fetchNotificationStatus,
@@ -846,6 +847,8 @@ export function SettingsPage({
                 </p>
               </div>
               <div className="settings-divider" />
+              <ChangePasswordPanel onNotify={onNotify} />
+              <div className="settings-divider" />
               <TwoFactorAccountPanel
                 onNotify={onNotify}
                 onAccountUpdated={(account) => {
@@ -1131,6 +1134,88 @@ export function SettingsPage({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ChangePasswordPanel({ onNotify }: { onNotify: (message: string) => void }) {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setError('')
+    if (newPassword.length < 10) {
+      setError('New password must be at least 10 characters')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setError('New password and confirmation do not match')
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await changePasswordRequest(currentPassword, newPassword)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+      onNotify('Password updated')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="settings-section settings-section-stack">
+      <div>
+        <h2>Password</h2>
+        <p>Change the password you use to sign in.</p>
+      </div>
+      <form className="totp-setup-panel" onSubmit={(event) => void submit(event)}>
+        <label>
+          Current password
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+            autoComplete="current-password"
+            required
+          />
+        </label>
+        <label>
+          New password
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            autoComplete="new-password"
+            minLength={10}
+            required
+          />
+        </label>
+        <label>
+          Confirm new password
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+            autoComplete="new-password"
+            minLength={10}
+            required
+          />
+        </label>
+        {error && <p className="login-error">{error}</p>}
+        <button type="submit" className="button button-primary" disabled={busy}>
+          {busy ? 'Updating…' : 'Update password'}
+        </button>
+      </form>
     </div>
   )
 }

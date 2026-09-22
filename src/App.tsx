@@ -172,6 +172,8 @@ function App() {
     empty.leaveYearClosures,
   )
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(empty.auditEvents)
+  const pendingAuditAppendRef = useRef<AuditEvent[]>([])
+  const persistChainRef = useRef(Promise.resolve(true))
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('company')
   const [absences, setAbsences] = useState<AbsenceRecord[]>(empty.absences)
   const [bankHolidays, setBankHolidays] = useState<BankHoliday[]>(empty.bankHolidays)
@@ -310,28 +312,48 @@ function App() {
     accounts?: Account[]
     company?: CompanySettings
   } = {}) => {
-    const result = await saveAppData({
-      employees,
-      absences,
-      company: overrides.company ?? company,
-      bankHolidays,
-      requests,
-      portalMessages,
-      documentFolders,
-      employeeDocuments,
-      accounts: overrides.accounts ?? accounts,
-      expenseClaims: overrides.expenseClaims ?? expenseClaims,
-      vatReceipts: overrides.vatReceipts ?? vatReceipts,
-      taskDismissals: overrides.taskDismissals ?? taskDismissals,
-      policies: overrides.policies ?? policies,
-      leaveAdjustments: overrides.leaveAdjustments ?? leaveAdjustments,
-      leaveYearClosures: overrides.leaveYearClosures ?? leaveYearClosures,
-      auditEvents: overrides.auditEvents ?? auditEvents,
-    })
-    if (result.ok && Array.isArray(result.data.auditEvents)) {
-      setAuditEvents(result.data.auditEvents)
+    const run = async () => {
+      const appendBatch = pendingAuditAppendRef.current
+      pendingAuditAppendRef.current = []
+      const auditSnapshot = mergeAuditEvents(
+        overrides.auditEvents ?? auditEvents,
+        appendBatch,
+      )
+      const result = await saveAppData({
+        employees,
+        absences,
+        company: overrides.company ?? company,
+        bankHolidays,
+        requests,
+        portalMessages,
+        documentFolders,
+        employeeDocuments,
+        accounts: overrides.accounts ?? accounts,
+        expenseClaims: overrides.expenseClaims ?? expenseClaims,
+        vatReceipts: overrides.vatReceipts ?? vatReceipts,
+        taskDismissals: overrides.taskDismissals ?? taskDismissals,
+        policies: overrides.policies ?? policies,
+        leaveAdjustments: overrides.leaveAdjustments ?? leaveAdjustments,
+        leaveYearClosures: overrides.leaveYearClosures ?? leaveYearClosures,
+        auditEvents: auditSnapshot,
+        _auditAppend: appendBatch,
+      })
+      if (!result.ok) {
+        pendingAuditAppendRef.current = [...appendBatch, ...pendingAuditAppendRef.current]
+        return false
+      }
+      if (Array.isArray(result.data.auditEvents)) {
+        setAuditEvents(result.data.auditEvents)
+      }
+      return true
     }
-    return result.ok
+
+    const queued = persistChainRef.current.then(run, run)
+    persistChainRef.current = queued.then(
+      () => true,
+      () => false,
+    )
+    return queued
   }
 
   useEffect(() => {
@@ -445,13 +467,16 @@ function App() {
       entityType: input.entityType,
       entityId: input.entityId,
     })
+    pendingAuditAppendRef.current = [...pendingAuditAppendRef.current, event]
     setAuditEvents((current) => appendAuditEvent(current, event))
   }
   const refreshAuditEvents = async () => {
     const result = await fetchAppData()
     if (!result.ok) return
     if (Array.isArray(result.data.auditEvents)) {
-      setAuditEvents(mergeAuditEvents(auditEvents, result.data.auditEvents as AuditEvent[]))
+      setAuditEvents((current) =>
+        mergeAuditEvents(current, result.data.auditEvents as AuditEvent[]),
+      )
     }
   }
   const currentEmployee =

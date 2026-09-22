@@ -10,16 +10,17 @@ import {
   confirmTwoFactor,
   fetchMe,
   loginWithPassword,
+  requestPasswordReset,
   setupTwoFactor,
   verifyTwoFactorCode,
-  webauthnAuthenticateOptions,
-  webauthnAuthenticateVerify,
+  webauthnLoginOptions,
+  webauthnLoginVerify,
   webauthnRegisterOptions,
   webauthnRegisterVerify,
   type PublicAccount,
 } from '../api'
 
-type Step = 'credentials' | 'totp' | 'setupChoice' | 'setup' | 'recoveryCodes'
+type Step = 'credentials' | 'forgot' | 'totp' | 'setupChoice' | 'setup' | 'recoveryCodes'
 
 export function LoginPage({
   onSignedIn,
@@ -39,7 +40,7 @@ export function LoginPage({
   const [setupQr, setSetupQr] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([])
   const [pendingAccount, setPendingAccount] = useState<PublicAccount | null>(null)
-  const [passkeysAvailable, setPasskeysAvailable] = useState(false)
+  const [forgotMessage, setForgotMessage] = useState('')
   const passkeysSupported = browserSupportsWebAuthn()
 
   useEffect(() => {
@@ -48,7 +49,6 @@ export function LoginPage({
       if (!me.ok) return
       if (me.data.kind === 'pending_2fa') {
         setPendingAccount(me.data.account)
-        setPasskeysAvailable(Boolean(me.data.account.passkeyCount))
         setChallenge('account')
         setStep('totp')
         return
@@ -81,6 +81,23 @@ export function LoginPage({
     return true
   }
 
+  const handleForgotPassword = async (event: FormEvent) => {
+    event.preventDefault()
+    setError('')
+    setForgotMessage('')
+    setBusy(true)
+    try {
+      const result = await requestPasswordReset(email)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setForgotMessage(result.data.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const handleCredentials = async (event: FormEvent) => {
     event.preventDefault()
     setError('')
@@ -94,7 +111,6 @@ export function LoginPage({
       if ('requires2fa' in result.data && result.data.requires2fa) {
         setChallenge(result.data.challenge)
         if (result.data.account) setPendingAccount(result.data.account)
-        setPasskeysAvailable(Boolean(result.data.passkeysAvailable))
         setStep('totp')
         return
       }
@@ -137,17 +153,21 @@ export function LoginPage({
     }
   }
 
-  const handlePasskeySignIn = async () => {
+  const handlePasskeyLogin = async () => {
     setError('')
+    if (!email.trim()) {
+      setError('Enter your email to sign in with a passkey')
+      return
+    }
     setBusy(true)
     try {
-      const options = await webauthnAuthenticateOptions()
+      const options = await webauthnLoginOptions(email)
       if (!options.ok) {
         setError(options.error)
         return
       }
       const credential = await startAuthentication({ optionsJSON: options.data as never })
-      const result = await webauthnAuthenticateVerify(credential)
+      const result = await webauthnLoginVerify(email, credential)
       if (!result.ok) {
         setError(result.error)
         return
@@ -247,9 +267,77 @@ export function LoginPage({
                 />
               </label>
               {error && <p className="login-error">{error}</p>}
+              <div className="login-actions-row">
+                <button type="submit" className="button button-primary" disabled={busy}>
+                  {busy ? 'Signing in…' : 'Sign in'}
+                </button>
+                {passkeysSupported && (
+                  <button
+                    type="button"
+                    className="button button-secondary login-passkey-btn"
+                    disabled={busy}
+                    onClick={() => void handlePasskeyLogin()}
+                  >
+                    Sign in with passkey
+                  </button>
+                )}
+              </div>
+            </form>
+            <div className="login-forgot-wrap">
+              <button
+                type="button"
+                className="login-forgot-link"
+                disabled={busy}
+                onClick={() => {
+                  setStep('forgot')
+                  setError('')
+                  setForgotMessage('')
+                  setPassword('')
+                }}
+              >
+                Forgot password?
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 'forgot' && (
+          <>
+            <h1>Reset password</h1>
+            <p className="login-lede">
+              We will email you a temporary password. If you have lost access to two-factor
+              authentication, contact your organisation admin after resetting — they can clear MFA
+              so you can enrol again.
+            </p>
+            <form className="login-form" onSubmit={handleForgotPassword}>
+              <label>
+                Email
+                <input
+                  type="email"
+                  autoComplete="username"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  required
+                  autoFocus
+                />
+              </label>
+              {error && <p className="login-error">{error}</p>}
+              {forgotMessage && <p className="field-helper">{forgotMessage}</p>}
               <button type="submit" className="button button-primary" disabled={busy}>
-                {busy ? 'Signing in…' : 'Sign in'}
+                {busy ? 'Sending…' : 'Email temporary password'}
                 <ChevronRight size={15} />
+              </button>
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => {
+                  setStep('credentials')
+                  setError('')
+                  setForgotMessage('')
+                }}
+              >
+                Back to sign in
               </button>
             </form>
           </>
@@ -261,20 +349,8 @@ export function LoginPage({
             <p className="login-lede">
               {challenge === 'master'
                 ? 'Enter the code from the master recovery authenticator.'
-                : 'Use a passkey, authenticator code, or recovery code to continue.'}
+                : 'Enter an authenticator or recovery code to continue.'}
             </p>
-            {challenge === 'account' && passkeysAvailable && passkeysSupported && (
-              <div className="login-form" style={{ marginBottom: 12 }}>
-                <button
-                  type="button"
-                  className="button button-primary"
-                  disabled={busy}
-                  onClick={() => void handlePasskeySignIn()}
-                >
-                  {busy ? 'Waiting for passkey…' : 'Continue with passkey'}
-                </button>
-              </div>
-            )}
             <form className="login-form" onSubmit={handleTotp}>
               <label>
                 Authentication code

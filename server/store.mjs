@@ -5,11 +5,24 @@ import pg from 'pg'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
-const DATA_DIR = path.join(ROOT, 'data')
+const DATA_DIR = path.resolve(
+  (process.env.FINCH_DATA_DIR || '').trim() || path.join(ROOT, 'data'),
+)
 const STORE_PATH = path.join(DATA_DIR, 'finch-store.json')
 
 let pool = null
 let backend = 'json'
+/** Serialize read-modify-write so concurrent API handlers cannot clobber each other. */
+let storeGate = Promise.resolve()
+
+function withStoreGate(work) {
+  const run = storeGate.then(work, work)
+  storeGate = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
 
 function databaseUrl() {
   return (process.env.DATABASE_URL || '').trim()
@@ -160,6 +173,10 @@ export function getStoreBackend() {
 }
 
 export async function readStore() {
+  return readStoreUnlocked()
+}
+
+async function readStoreUnlocked() {
   if (backend === 'json' || !pool) {
     return readJsonStore()
   }
@@ -167,13 +184,17 @@ export async function readStore() {
   const result = await pool.query('SELECT payload FROM finch_store WHERE id = 1')
   if (result.rowCount === 0) {
     const fresh = defaultStore()
-    await writeStore(fresh)
+    await writeStoreUnlocked(fresh)
     return fresh
   }
   return result.rows[0].payload
 }
 
 export async function writeStore(store) {
+  return withStoreGate(async () => writeStoreUnlocked(store))
+}
+
+async function writeStoreUnlocked(store) {
   if (backend === 'json' || !pool) {
     writeJsonStore(store)
     return
@@ -196,6 +217,19 @@ export async function writeStore(store) {
   } finally {
     client.release()
   }
+}
+
+/**
+ * Atomically read, mutate, and write the store.
+ * Prefer this over readStore()+writeStore() when concurrent requests may race.
+ */
+export async function updateStore(mutator) {
+  return withStoreGate(async () => {
+    const store = await readStoreUnlocked()
+    const result = await mutator(store)
+    await writeStoreUnlocked(store)
+    return result
+  })
 }
 
 export async function closeStore() {

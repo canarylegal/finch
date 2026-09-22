@@ -76,6 +76,73 @@ button {
   letter-spacing: -0.03em;
 }
 
+.login-text-button {
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2f6f64;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.login-text-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-actions-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.login-actions-row .button {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  margin-top: 0;
+}
+
+.login-passkey-btn {
+  white-space: nowrap;
+}
+
+.login-forgot-wrap {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.login-forgot-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #6b7c79;
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.login-forgot-link:hover {
+  color: #2f6f64;
+}
+
+.login-forgot-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 560px) {
+  .login-actions-row {
+    flex-direction: column;
+  }
+}
+
 .login-lede {
   margin: 0 0 22px;
   color: var(--muted);
@@ -129,8 +196,37 @@ button {
 }
 
 .recovery-panel {
-  max-width: 640px;
-  width: min(640px, 100%);
+  max-width: 720px;
+  width: min(720px, 100%);
+}
+
+.recovery-account-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.recovery-inline-form {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.recovery-inline-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #81918f;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.recovery-inline-form input {
+  width: 100%;
 }
 
 .recovery-next-step {

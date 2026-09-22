@@ -72,6 +72,13 @@ export async function loginWithPassword(email: string, password: string) {
   })
 }
 
+export async function requestPasswordReset(email: string) {
+  return api<{ ok: true; message: string }>('/api/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
 export async function verifyTwoFactorCode(code: string) {
   return api<
     | { account: PublicAccount; recovery?: undefined }
@@ -144,6 +151,20 @@ export async function webauthnAuthenticateVerify(credential: unknown) {
   return api<{ account: PublicAccount }>('/api/auth/webauthn/authenticate/verify', {
     method: 'POST',
     body: JSON.stringify({ credential }),
+  })
+}
+
+export async function webauthnLoginOptions(email: string) {
+  return api<Record<string, unknown>>('/api/auth/webauthn/login/options', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export async function webauthnLoginVerify(email: string, credential: unknown) {
+  return api<{ account: PublicAccount }>('/api/auth/webauthn/login/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email, credential }),
   })
 }
 
@@ -244,10 +265,23 @@ export async function recoveryUpdateAccount(id: number, payload: Record<string, 
   })
 }
 
+export async function recoveryDeleteAccount(id: number) {
+  return api<{ ok: true; deletedId: number }>(`/api/recovery/accounts/${id}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function verifyPasswordRequest(password: string) {
   return api<{ ok: true }>('/api/auth/verify-password', {
     method: 'POST',
     body: JSON.stringify({ password }),
+  })
+}
+
+export async function changePasswordRequest(currentPassword: string, newPassword: string) {
+  return api<{ ok: true }>('/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
   })
 }
 

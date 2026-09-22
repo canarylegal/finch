@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react'
 import {
   logoutRequest,
   recoveryCreateAccount,
+  recoveryDeleteAccount,
   recoveryListAccounts,
   recoveryUpdateAccount,
   type PublicAccount,
@@ -18,6 +19,8 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
   const [password, setPassword] = useState('')
   const [showAddAdmin, setShowAddAdmin] = useState(false)
   const [justCreatedPrimary, setJustCreatedPrimary] = useState(false)
+  const [passwordResetId, setPasswordResetId] = useState<number | null>(null)
+  const [newPassword, setNewPassword] = useState('')
 
   const primary = accounts.find((account) => account.isPrimary)
   const hasAccounts = accounts.length > 0
@@ -74,16 +77,68 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
     }
   }
 
-  const patchAccount = async (id: number, payload: Record<string, unknown>) => {
+  const patchAccount = async (id: number, payload: Record<string, unknown>, successMessage: string) => {
     setError('')
     setMessage('')
-    const result = await recoveryUpdateAccount(id, payload)
-    if (!result.ok) {
-      setError(result.error)
+    setBusy(true)
+    try {
+      const result = await recoveryUpdateAccount(id, payload)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setMessage(successMessage)
+      setPasswordResetId(null)
+      setNewPassword('')
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const deleteAccount = async (account: PublicAccount) => {
+    const label = `${account.displayName} (${account.email})`
+    if (
+      !window.confirm(
+        `Delete ${label} permanently?\n\nThis cannot be undone. Their employee profile (if linked) is left in place.`,
+      )
+    ) {
       return
     }
-    setMessage('Account updated')
-    await refresh()
+    setError('')
+    setMessage('')
+    setBusy(true)
+    try {
+      const result = await recoveryDeleteAccount(account.id)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setMessage(`Deleted ${label}.`)
+      if (passwordResetId === account.id) {
+        setPasswordResetId(null)
+        setNewPassword('')
+      }
+      await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitPasswordReset = async (event: FormEvent, accountId: number) => {
+    event.preventDefault()
+    if (newPassword.length < 10) {
+      setError('Password must be at least 10 characters')
+      return
+    }
+    await patchAccount(accountId, { password: newPassword }, 'Password reset.')
+  }
+
+  const securityLabel = (account: PublicAccount) => {
+    const parts: string[] = []
+    if (account.totpEnabled) parts.push('2FA on')
+    if ((account.passkeyCount ?? 0) > 0) parts.push(`${account.passkeyCount} passkey${account.passkeyCount === 1 ? '' : 's'}`)
+    return parts.length ? parts.join(' · ') : 'no MFA'
   }
 
   return (
@@ -93,7 +148,7 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
         <h1>Recovery console</h1>
         <p className="login-lede">
           {hasAccounts
-            ? 'Manage admin accounts, or sign out so the primary admin can set up the organisation.'
+            ? 'Break-glass tools: transfer primary, reset passwords, clear MFA, deactivate, or delete accounts.'
             : 'Create the primary admin account. Organisation setup is done by that admin after they sign in.'}
         </p>
 
@@ -172,15 +227,15 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
 
             <div className="recovery-account-list">
               {accounts.map((account) => (
-                <div className="account-admin-row" key={account.id}>
-                  <div>
+                <div className="account-admin-row recovery-account-row" key={account.id}>
+                  <div className="account-admin-copy">
                     <strong>
                       {account.displayName}
                       {account.isPrimary ? ' (primary)' : ''}
                     </strong>
                     <span>
                       {account.email} · {account.role}
-                      {account.status === 'Inactive' ? ' · inactive' : ''}
+                      {account.status === 'Inactive' ? ' · inactive' : ''} · {securityLabel(account)}
                     </span>
                   </div>
                   <div className="account-admin-actions">
@@ -188,7 +243,10 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
                       <button
                         type="button"
                         className="button button-secondary"
-                        onClick={() => patchAccount(account.id, { role: 'employee' })}
+                        disabled={busy}
+                        onClick={() =>
+                          void patchAccount(account.id, { role: 'employee' }, 'Role updated.')
+                        }
                       >
                         Make employee
                       </button>
@@ -196,7 +254,8 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
                       <button
                         type="button"
                         className="button button-secondary"
-                        onClick={() => patchAccount(account.id, { role: 'admin' })}
+                        disabled={busy}
+                        onClick={() => void patchAccount(account.id, { role: 'admin' }, 'Role updated.')}
                       >
                         Make admin
                       </button>
@@ -205,7 +264,10 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
                       <button
                         type="button"
                         className="button button-secondary"
-                        onClick={() => patchAccount(account.id, { status: 'Inactive' })}
+                        disabled={busy}
+                        onClick={() =>
+                          void patchAccount(account.id, { status: 'Inactive' }, 'Account deactivated.')
+                        }
                       >
                         Deactivate
                       </button>
@@ -213,7 +275,10 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
                       <button
                         type="button"
                         className="button button-secondary"
-                        onClick={() => patchAccount(account.id, { status: 'Active' })}
+                        disabled={busy}
+                        onClick={() =>
+                          void patchAccount(account.id, { status: 'Active' }, 'Account reactivated.')
+                        }
                       >
                         Reactivate
                       </button>
@@ -222,12 +287,92 @@ export function RecoveryConsole({ onSignedOut }: { onSignedOut: () => void }) {
                       <button
                         type="button"
                         className="button button-secondary"
-                        onClick={() => patchAccount(account.id, { isPrimary: true })}
+                        disabled={busy}
+                        onClick={() =>
+                          void patchAccount(account.id, { isPrimary: true }, 'Primary admin transferred.')
+                        }
                       >
                         Make primary
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setPasswordResetId(account.id)
+                        setNewPassword('')
+                        setError('')
+                        setMessage('')
+                      }}
+                    >
+                      Reset password
+                    </button>
+                    {(account.totpEnabled || (account.passkeyCount ?? 0) > 0) && (
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        disabled={busy}
+                        onClick={() => {
+                          if (
+                            !window.confirm(
+                              `Clear MFA for ${account.displayName}?\n\nThis removes authenticator 2FA and all passkeys so they can sign in with password only.`,
+                            )
+                          ) {
+                            return
+                          }
+                          void patchAccount(
+                            account.id,
+                            { clearTwoFactor: true, clearPasskeys: true },
+                            'MFA cleared.',
+                          )
+                        }}
+                      >
+                        Reset MFA
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="button button-secondary danger-text-button"
+                      disabled={busy}
+                      onClick={() => void deleteAccount(account)}
+                    >
+                      Delete
+                    </button>
                   </div>
+                  {passwordResetId === account.id && (
+                    <form
+                      className="recovery-inline-form"
+                      onSubmit={(event) => void submitPasswordReset(event, account.id)}
+                    >
+                      <label>
+                        New password for {account.email}
+                        <input
+                          type="password"
+                          value={newPassword}
+                          onChange={(event) => setNewPassword(event.target.value)}
+                          minLength={10}
+                          autoFocus
+                          required
+                        />
+                      </label>
+                      <div className="recovery-next-actions">
+                        <button type="submit" className="button button-primary" disabled={busy}>
+                          Save password
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          onClick={() => {
+                            setPasswordResetId(null)
+                            setNewPassword('')
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               ))}
             </div>
