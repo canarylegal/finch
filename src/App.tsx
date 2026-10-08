@@ -235,6 +235,11 @@ function App() {
   const [toast, setToast] = useState('')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [adminWorkspaceView, setAdminWorkspaceView] = useState<'admin' | 'employee'>('admin')
+  const [syncConflict, setSyncConflict] = useState<{
+    serverData: Record<string, unknown>
+    serverRevision: number
+  } | null>(null)
+  const [conflictBusy, setConflictBusy] = useState(false)
 
   const applyAppData = (data: Record<string, unknown>) => {
     const fallback = emptyRuntimeData()
@@ -428,6 +433,7 @@ function App() {
     auditEvents?: AuditEvent[]
     accounts?: Account[]
     company?: CompanySettings
+    revision?: number
   } = {}) => {
     const run = async () => {
       const appendBatch = pendingAuditAppendRef.current
@@ -456,16 +462,29 @@ function App() {
         leaveYearClosures: overrides.leaveYearClosures ?? snapshot.leaveYearClosures,
         auditEvents: auditSnapshot,
         _auditAppend: appendBatch,
-        _revision: snapshot.revision,
+        _revision: overrides.revision ?? snapshot.revision,
       })
       if (!result.ok) {
         pendingAuditAppendRef.current = [...appendBatch, ...pendingAuditAppendRef.current]
         if (result.status === 409) {
+          // Keep local edits — offer a choice instead of silently discarding them.
           const fresh = await fetchAppData()
+          const serverRevision =
+            fresh.ok && typeof fresh.data.revision === 'number'
+              ? fresh.data.revision
+              : typeof result.revision === 'number'
+                ? result.revision
+                : snapshot.revision
           if (fresh.ok) {
-            suppressPersistRef.current = true
-            applyAppData(fresh.data)
-            notify('Someone else updated this organisation. Your view was refreshed.')
+            setSyncConflict({
+              serverData: fresh.data,
+              serverRevision,
+            })
+          } else {
+            setToast(
+              'Someone else updated this organisation. Your changes were kept — try saving again shortly.',
+            )
+            window.setTimeout(() => setToast(''), 5000)
           }
         }
         return false
@@ -673,6 +692,33 @@ function App() {
   const notify = (message: string) => {
     setToast(message)
     window.setTimeout(() => setToast(''), 2800)
+  }
+
+  const discardConflictAndReload = () => {
+    if (!syncConflict) return
+    suppressPersistRef.current = true
+    applyAppData(syncConflict.serverData)
+    setSyncConflict(null)
+    notify('Loaded the latest organisation data')
+  }
+
+  const keepConflictChangesAndRetry = async () => {
+    if (!syncConflict || conflictBusy) return
+    setConflictBusy(true)
+    try {
+      const revision = syncConflict.serverRevision
+      setSyncConflict(null)
+      suppressPersistRef.current = true
+      setDataRevision(revision)
+      const saved = await persistAppData({ revision })
+      if (saved) {
+        notify('Your changes were saved')
+      } else {
+        notify('Could not save your changes. Check the conflict prompt or try again.')
+      }
+    } finally {
+      setConflictBusy(false)
+    }
   }
 
   const switchWorkspaceView = () => {
@@ -2539,6 +2585,46 @@ function App() {
           />
         )
       })()}
+      {syncConflict && (
+        <div className="modal-backdrop" role="presentation">
+          <div
+            className="modal sync-conflict-modal"
+            role="alertdialog"
+            aria-labelledby="sync-conflict-title"
+            aria-describedby="sync-conflict-body"
+          >
+            <div className="modal-header">
+              <h2 id="sync-conflict-title">Organisation updated elsewhere</h2>
+            </div>
+            <div className="modal-body">
+              <p id="sync-conflict-body">
+                Someone else saved changes while you were editing. Your unsaved work is still on
+                this screen — choose whether to keep it or load their version.
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={conflictBusy}
+                onClick={discardConflictAndReload}
+              >
+                Load their version
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={conflictBusy}
+                onClick={() => {
+                  void keepConflictChangesAndRetry()
+                }}
+              >
+                {conflictBusy ? 'Saving…' : 'Keep mine and save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {toast && (
         <div className="toast">
           <Check size={16} />

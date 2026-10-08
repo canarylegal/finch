@@ -3,7 +3,10 @@ const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || ''
 async function api<T>(
   path: string,
   options: RequestInit = {},
-): Promise<{ ok: true; data: T } | { ok: false; status: number; error: string }> {
+): Promise<
+  | { ok: true; data: T }
+  | { ok: false; status: number; error: string; revision?: number }
+> {
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       credentials: 'include',
@@ -19,6 +22,7 @@ async function api<T>(
         ok: false,
         status: response.status,
         error: typeof payload.error === 'string' ? payload.error : 'Request failed',
+        revision: typeof payload.revision === 'number' ? payload.revision : undefined,
       }
     }
     return { ok: true, data: payload as T }
