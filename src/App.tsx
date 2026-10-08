@@ -248,6 +248,8 @@ function App() {
     pendingMerge: {
       mergedPayload: Record<string, unknown>
       overlapCount: number
+      /** `persistEpochRef` at prepare time — confirm must match or recalculate. */
+      localEpoch: number
     } | null
   } | null>(null)
   const [conflictBusy, setConflictBusy] = useState(false)
@@ -789,54 +791,67 @@ function App() {
     }
   }
 
+  const prepareConflictMerge = async () => {
+    if (!syncConflict) return
+    // Refresh both sides: local may have changed while the dialog was open, and
+    // another save may have landed on the server in the meantime.
+    const fresh = await fetchAppData()
+    if (!fresh.ok) {
+      notify('Could not refresh organisation data. Try again.')
+      return
+    }
+    const serverRevision =
+      typeof fresh.data.revision === 'number'
+        ? fresh.data.revision
+        : syncConflict.serverRevision
+    const localEpoch = persistEpochRef.current
+    const localData = structuredClone(appDataSnapshotRef.current) as Record<string, unknown>
+    const { merged, conflicts } = mergeAppData(
+      syncConflict.baseData,
+      localData,
+      fresh.data,
+    )
+    const mergedPayload = { ...merged, revision: serverRevision }
+    const overlapSummaries = describeConflicts(conflicts)
+
+    // Always show recalculated overlaps before committing when any exist.
+    if (conflicts.length > 0) {
+      setSyncConflict({
+        ...syncConflict,
+        serverData: fresh.data,
+        serverRevision,
+        localData,
+        overlapSummaries,
+        pendingMerge: {
+          mergedPayload,
+          overlapCount: conflicts.length,
+          localEpoch,
+        },
+      })
+      notify('Review the overlapping fields below, then confirm the merge.')
+      return
+    }
+
+    await commitPendingConflictMerge(mergedPayload, 0)
+  }
+
   const mergeConflictChangesAndSave = async () => {
     if (!syncConflict || conflictBusy) return
     setConflictBusy(true)
     try {
-      // Confirm step: user already reviewed freshly calculated overlaps.
-      if (syncConflict.pendingMerge) {
-        await commitPendingConflictMerge(
-          syncConflict.pendingMerge.mergedPayload,
-          syncConflict.pendingMerge.overlapCount,
-        )
+      const pending = syncConflict.pendingMerge
+      if (pending) {
+        // Local edits after prepare invalidate the stored payload — recalculate.
+        if (persistEpochRef.current !== pending.localEpoch) {
+          notify('Your local edits changed — recalculating the merge.')
+          await prepareConflictMerge()
+          return
+        }
+        await commitPendingConflictMerge(pending.mergedPayload, pending.overlapCount)
         return
       }
 
-      // Refresh both sides: local may have changed while the dialog was open, and
-      // another save may have landed on the server in the meantime.
-      const fresh = await fetchAppData()
-      if (!fresh.ok) {
-        notify('Could not refresh organisation data. Try again.')
-        return
-      }
-      const serverRevision =
-        typeof fresh.data.revision === 'number'
-          ? fresh.data.revision
-          : syncConflict.serverRevision
-      const localData = structuredClone(appDataSnapshotRef.current) as Record<string, unknown>
-      const { merged, conflicts } = mergeAppData(
-        syncConflict.baseData,
-        localData,
-        fresh.data,
-      )
-      const mergedPayload = { ...merged, revision: serverRevision }
-      const overlapSummaries = describeConflicts(conflicts)
-
-      // Always show recalculated overlaps before committing when any exist.
-      if (conflicts.length > 0) {
-        setSyncConflict({
-          ...syncConflict,
-          serverData: fresh.data,
-          serverRevision,
-          localData,
-          overlapSummaries,
-          pendingMerge: { mergedPayload, overlapCount: conflicts.length },
-        })
-        notify('Review the overlapping fields below, then confirm the merge.')
-        return
-      }
-
-      await commitPendingConflictMerge(mergedPayload, 0)
+      await prepareConflictMerge()
     } finally {
       setConflictBusy(false)
     }
