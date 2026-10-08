@@ -1471,12 +1471,16 @@ app.put('/api/app-data', async (req, res) => {
   })
 
   if (!result?.ok) {
-    return res.status(result?.status || 400).json({ error: result?.error || 'Save failed' })
+    return res.status(result?.status || 400).json({
+      error: result?.error || 'Save failed',
+      revision: result?.revision,
+    })
   }
   res.json({
     ok: true,
     auditEvents: result.auditEvents,
     data: result.data,
+    revision: result.revision,
     idRemap: result.idRemap || { requests: [], expenseClaims: [] },
   })
 })

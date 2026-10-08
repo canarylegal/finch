@@ -23,10 +23,11 @@ describe('audit persistence (V1-F1)', () => {
     await server.stop()
   })
 
-  test('concurrent app-data saves keep earlier _auditAppend events', async () => {
+  test('concurrent app-data saves: one wins, retry keeps both audits', async () => {
     const base = await server.api('/api/app-data', { cookie })
     assert.equal(base.status, 200)
     const company = base.payload.company
+    const revision = base.payload.revision
 
     const approvalAppend = [
       {
@@ -48,30 +49,56 @@ describe('audit persistence (V1-F1)', () => {
       },
     ]
 
-    const staleBody = {
-      ...base.payload,
-      company,
-      auditEvents: [],
-      _auditAppend: approvalAppend,
-    }
-    const settingsBody = {
-      ...base.payload,
-      company: { ...company, payrollEmail: 'payroll@example.com' },
-      auditEvents: [],
-      _auditAppend: settingsAppend,
-    }
-
     const [first, second] = await Promise.all([
-      server.api('/api/app-data', { method: 'PUT', cookie, body: staleBody }),
-      server.api('/api/app-data', { method: 'PUT', cookie, body: settingsBody }),
+      server.api('/api/app-data', {
+        method: 'PUT',
+        cookie,
+        body: {
+          ...base.payload,
+          company,
+          auditEvents: [],
+          _auditAppend: approvalAppend,
+          _revision: revision,
+        },
+      }),
+      server.api('/api/app-data', {
+        method: 'PUT',
+        cookie,
+        body: {
+          ...base.payload,
+          company: { ...company, payrollEmail: 'payroll@example.com' },
+          auditEvents: [],
+          _auditAppend: settingsAppend,
+          _revision: revision,
+        },
+      }),
     ])
-    assert.equal(first.status, 200)
-    assert.equal(second.status, 200)
+    assert.deepEqual([first.status, second.status].sort(), [200, 409])
+
+    const loserWasSettings = second.status === 409
+    const latest = await server.api('/api/app-data', { cookie })
+    assert.equal(latest.status, 200)
+
+    const retried = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie,
+      body: {
+        ...latest.payload,
+        company: {
+          ...latest.payload.company,
+          ...(loserWasSettings ? { payrollEmail: 'payroll@example.com' } : {}),
+        },
+        auditEvents: [],
+        _auditAppend: loserWasSettings ? settingsAppend : approvalAppend,
+        _revision: latest.payload.revision,
+      },
+    })
+    assert.equal(retried.status, 200)
 
     const after = await server.api('/api/app-data', { cookie })
     assert.equal(after.status, 200)
     const ids = (after.payload.auditEvents || []).map((item) => item.id)
-    assert.ok(ids.includes('aud-approval-race-1'), 'approval audit must survive concurrent save')
+    assert.ok(ids.includes('aud-approval-race-1'), 'approval audit must survive')
     assert.ok(ids.includes('aud-settings-race-1'), 'settings audit must be present')
   })
 })

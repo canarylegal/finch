@@ -256,6 +256,7 @@ export async function saveAppData(data: Record<string, unknown>) {
     ok: true
     auditEvents?: import('./auditLog').AuditEvent[]
     data?: Record<string, unknown>
+    revision?: number
     idRemap?: {
       requests: Array<{ from: number; to: number }>
       expenseClaims: Array<{ from: number; to: number }>

@@ -184,5 +184,30 @@ export async function startTestServer(extraEnv = {}) {
     }
   }
 
-  return { baseUrl, api, cookieHeader, stop, dataDir, patchStore, seedAdminWorkspace, login }
+  /** GET current app-data then PUT with matching _revision. */
+  async function putAppData(cookie, build) {
+    const current = await api('/api/app-data', { cookie })
+    if (current.status !== 200) return current
+    const body = typeof build === 'function' ? build(current.payload) : build
+    return api('/api/app-data', {
+      method: 'PUT',
+      cookie,
+      body: {
+        ...body,
+        _revision: current.payload.revision,
+      },
+    })
+  }
+
+  return {
+    baseUrl,
+    api,
+    cookieHeader,
+    stop,
+    dataDir,
+    patchStore,
+    seedAdminWorkspace,
+    login,
+    putAppData,
+  }
 }

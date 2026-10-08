@@ -110,6 +110,7 @@ export function projectAppDataForViewer(store, account, publicAccount) {
   }))
 
   return {
+    revision: Number(appData.revision) || 1,
     company: publicCompanyForEmployee(appData.company),
     bankHolidays: asArray(appData.bankHolidays),
     employees,
@@ -335,9 +336,14 @@ function mergeEmployeeDocuments(serverFolders, serverDocs, _incomingFolders, inc
   }
 }
 
+function liveRevision(appData) {
+  const value = Number(appData?.revision)
+  return Number.isFinite(value) && value >= 1 ? value : 1
+}
+
 /**
  * Apply a client app-data write under role rules.
- * Returns { ok: true, auditEvents } or { ok: false, status, error }.
+ * Returns { ok: true, auditEvents, revision } or { ok: false, status, error, revision? }.
  */
 export function applyAppDataWrite(store, account, incoming, { createAuditEventFn = createAuditEvent } = {}) {
   const body = incoming || {}
@@ -345,6 +351,8 @@ export function applyAppDataWrite(store, account, incoming, { createAuditEventFn
     accounts: _ignoredAccounts,
     _auditAppend: rawAppend,
     _allowEmployeeSave: _ignoredFlag,
+    _revision: expectedRevisionRaw,
+    revision: _ignoredClientRevision,
     ...appData
   } = body
 
@@ -356,6 +364,17 @@ export function applyAppDataWrite(store, account, incoming, { createAuditEventFn
     return { ok: false, status: 403, error: 'Account is not linked to an organisation' }
   }
   const current = ensureTenantAppData(store, account.tenantId)
+  const expectedRevision = Number(expectedRevisionRaw)
+  const currentRev = liveRevision(current)
+  if (!Number.isFinite(expectedRevision) || expectedRevision !== currentRev) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'This organisation was updated elsewhere. Reload and try again.',
+      revision: currentRev,
+    }
+  }
+  const nextRevision = currentRev + 1
 
   if (account.role === 'admin') {
     const stampedAppend = asArray(rawAppend).map((item) =>
@@ -385,8 +404,9 @@ export function applyAppDataWrite(store, account, incoming, { createAuditEventFn
         ...appData.company,
       },
       auditEvents: nextAudit,
+      revision: nextRevision,
     }
-    return { ok: true, auditEvents: nextAudit }
+    return { ok: true, auditEvents: nextAudit, revision: nextRevision }
   }
 
   // Employee path: merge only self-scoped mutable slices into server truth.
@@ -437,6 +457,7 @@ export function applyAppDataWrite(store, account, incoming, { createAuditEventFn
     leaveYearClosures: current.leaveYearClosures,
     vatReceipts: current.vatReceipts,
     auditEvents: current.auditEvents,
+    revision: nextRevision,
   }
 
   const remapEntries = (remap) =>
@@ -445,6 +466,7 @@ export function applyAppDataWrite(store, account, incoming, { createAuditEventFn
   return {
     ok: true,
     auditEvents: [],
+    revision: nextRevision,
     idRemap: {
       requests: remapEntries(requestMerge.idRemap),
       expenseClaims: remapEntries(expenseMerge.idRemap),

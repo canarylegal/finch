@@ -22,114 +22,110 @@ describe('app-data authorization', () => {
     assert.equal(adminLogin.status, 200)
     adminCookie = adminLogin.cookie
 
-    const seed = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: adminCookie,
-      body: {
-        company: {
-          name: 'Secure Co',
-          leaveYearConfigured: true,
-          leaveYearStart: 'January',
-          leaveYearEnd: 'December',
-          payrollEmail: 'payroll@secure.test',
-          twoFactorRequired: 'optional',
-        },
-        employees: [
-          {
-            id: 1,
-            name: 'Test Admin',
-            initials: 'TA',
-            role: 'Admin',
-            entitlement: 25,
-            entitlementUnit: 'days',
-            rollOver: 0,
-            workingDays: [1, 2, 3, 4, 5],
-            entitlementMode: 'proRata',
-            color: 'sage',
-            status: 'Active',
-            startDate: '2026-01-01',
-            probationEndDate: null,
-          },
-          {
-            id: 2,
-            name: 'Test Employee',
-            initials: 'TE',
-            role: 'Associate',
-            entitlement: 25,
-            entitlementUnit: 'days',
-            rollOver: 0,
-            workingDays: [1, 2, 3, 4, 5],
-            entitlementMode: 'proRata',
-            color: 'peach',
-            status: 'Active',
-            startDate: '2026-01-01',
-            probationEndDate: null,
-          },
-        ],
-        documentFolders: [
-          {
-            id: 10,
-            employeeId: 2,
-            name: 'Employment documents',
-            visibility: 'shared',
-            createdAt: '2026-01-01T00:00:00.000Z',
-          },
-          {
-            id: 11,
-            employeeId: 2,
-            name: 'HR file',
-            visibility: 'internal',
-            createdAt: '2026-01-01T00:00:00.000Z',
-          },
-        ],
-        employeeDocuments: [
-          {
-            id: 100,
-            employeeId: 2,
-            folderId: 10,
-            title: 'Contract',
-            category: 'contract',
-            fileName: 'contract.txt',
-            fileType: 'text/plain',
-            fileDataUrl: 'data:text/plain;base64,c2hhcmVk',
-            updatedAt: '2026-01-01T00:00:00.000Z',
-            accent: 'sage',
-          },
-          {
-            id: 101,
-            employeeId: 2,
-            folderId: 11,
-            title: 'Confidential review',
-            category: 'other',
-            fileName: 'secret.txt',
-            fileType: 'text/plain',
-            fileDataUrl: 'data:text/plain;base64,c2VjcmV0',
-            updatedAt: '2026-01-01T00:00:00.000Z',
-            accent: 'coral',
-          },
-        ],
-        absences: [],
-        bankHolidays: [],
-        requests: [],
-        portalMessages: [],
-        expenseClaims: [],
-        vatReceipts: [{ id: 1, label: 'admin-only' }],
-        taskDismissals: [],
-        policies: [],
-        leaveAdjustments: [],
-        leaveYearClosures: [],
-        auditEvents: [],
-        _auditAppend: [
-          {
-            id: 'aud-seed-1',
-            at: '2026-01-01T00:00:00.000Z',
-            action: 'settings.updated',
-            summary: 'seed',
-            entityType: 'company',
-          },
-        ],
+    const seed = await server.putAppData(adminCookie, () => ({
+      company: {
+        name: 'Secure Co',
+        leaveYearConfigured: true,
+        leaveYearStart: 'January',
+        leaveYearEnd: 'December',
+        payrollEmail: 'payroll@secure.test',
+        twoFactorRequired: 'optional',
       },
-    })
+      employees: [
+        {
+          id: 1,
+          name: 'Test Admin',
+          initials: 'TA',
+          role: 'Admin',
+          entitlement: 25,
+          entitlementUnit: 'days',
+          rollOver: 0,
+          workingDays: [1, 2, 3, 4, 5],
+          entitlementMode: 'proRata',
+          color: 'sage',
+          status: 'Active',
+          startDate: '2026-01-01',
+          probationEndDate: null,
+        },
+        {
+          id: 2,
+          name: 'Test Employee',
+          initials: 'TE',
+          role: 'Associate',
+          entitlement: 25,
+          entitlementUnit: 'days',
+          rollOver: 0,
+          workingDays: [1, 2, 3, 4, 5],
+          entitlementMode: 'proRata',
+          color: 'peach',
+          status: 'Active',
+          startDate: '2026-01-01',
+          probationEndDate: null,
+        },
+      ],
+      documentFolders: [
+        {
+          id: 10,
+          employeeId: 2,
+          name: 'Employment documents',
+          visibility: 'shared',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          id: 11,
+          employeeId: 2,
+          name: 'HR file',
+          visibility: 'internal',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      employeeDocuments: [
+        {
+          id: 100,
+          employeeId: 2,
+          folderId: 10,
+          title: 'Contract',
+          category: 'contract',
+          fileName: 'contract.txt',
+          fileType: 'text/plain',
+          fileDataUrl: 'data:text/plain;base64,c2hhcmVk',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          accent: 'sage',
+        },
+        {
+          id: 101,
+          employeeId: 2,
+          folderId: 11,
+          title: 'Confidential review',
+          category: 'other',
+          fileName: 'secret.txt',
+          fileType: 'text/plain',
+          fileDataUrl: 'data:text/plain;base64,c2VjcmV0',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          accent: 'coral',
+        },
+      ],
+      absences: [],
+      bankHolidays: [],
+      requests: [],
+      portalMessages: [],
+      expenseClaims: [],
+      vatReceipts: [{ id: 1, label: 'admin-only' }],
+      taskDismissals: [],
+      policies: [],
+      leaveAdjustments: [],
+      leaveYearClosures: [],
+      auditEvents: [],
+      _auditAppend: [
+        {
+          id: 'aud-seed-1',
+          at: '2026-01-01T00:00:00.000Z',
+          action: 'settings.updated',
+          summary: 'seed',
+          entityType: 'company',
+        },
+      ],
+    }))
     assert.equal(seed.status, 200)
 
     // Link employee account to employee id 2
@@ -179,42 +175,35 @@ describe('app-data authorization', () => {
     const beforePayroll = beforeAdmin.payload.company.payrollEmail
     const beforeAudit = beforeAdmin.payload.auditEvents || []
 
-    const employeeView = await server.api('/api/app-data', { cookie: employeeCookie })
-    assert.equal(employeeView.status, 200)
-
-    const attack = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: employeeCookie,
-      body: {
-        ...employeeView.payload,
-        company: {
-          ...employeeView.payload.company,
-          name: 'Hijacked Co',
-          payrollEmail: 'attacker@evil.test',
-        },
-        auditEvents: [
-          {
-            id: 'aud-seed-1',
-            at: '2026-01-01T00:00:00.000Z',
-            actorAccountId: 2,
-            actorName: 'Attacker',
-            action: 'settings.updated',
-            summary: 'rewritten',
-            entityType: 'company',
-          },
-        ],
-        _auditAppend: [
-          {
-            id: 'aud-forged-1',
-            at: '2026-01-02T00:00:00.000Z',
-            action: 'settings.updated',
-            summary: 'forged',
-            entityType: 'company',
-          },
-        ],
-        vatReceipts: [{ id: 99, label: 'should-not-stick' }],
+    const attack = await server.putAppData(employeeCookie, (data) => ({
+      ...data,
+      company: {
+        ...data.company,
+        name: 'Hijacked Co',
+        payrollEmail: 'attacker@evil.test',
       },
-    })
+      auditEvents: [
+        {
+          id: 'aud-seed-1',
+          at: '2026-01-01T00:00:00.000Z',
+          actorAccountId: 2,
+          actorName: 'Attacker',
+          action: 'settings.updated',
+          summary: 'rewritten',
+          entityType: 'company',
+        },
+      ],
+      _auditAppend: [
+        {
+          id: 'aud-forged-1',
+          at: '2026-01-02T00:00:00.000Z',
+          action: 'settings.updated',
+          summary: 'forged',
+          entityType: 'company',
+        },
+      ],
+      vatReceipts: [{ id: 99, label: 'should-not-stick' }],
+    }))
     assert.equal(attack.status, 200)
 
     const afterAdmin = await server.api('/api/app-data', { cookie: adminCookie })
@@ -239,23 +228,19 @@ describe('app-data authorization', () => {
       false,
     )
 
-    const attack = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: employeeCookie,
-      body: {
-        ...employeeView.payload,
-        documentFolders: [
-          {
-            id: 11,
-            employeeId: 2,
-            name: 'HR file',
-            visibility: 'shared',
-            createdAt: '2026-01-01T00:00:00.000Z',
-          },
-        ],
-        employeeDocuments: employeeView.payload.employeeDocuments || [],
-      },
-    })
+    const attack = await server.putAppData(employeeCookie, (data) => ({
+      ...data,
+      documentFolders: [
+        {
+          id: 11,
+          employeeId: 2,
+          name: 'HR file',
+          visibility: 'shared',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      employeeDocuments: data.employeeDocuments || [],
+    }))
     assert.equal(attack.status, 200)
 
     const afterEmployee = await server.api('/api/app-data', { cookie: employeeCookie })
@@ -280,58 +265,52 @@ describe('app-data authorization', () => {
 
   test('employee cannot steal another employee request id to read their messages', async () => {
     // Add a second employee with a pending request + private thread.
-    const adminView = await server.api('/api/app-data', { cookie: adminCookie })
-    assert.equal(adminView.status, 200)
-    const seeded = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: adminCookie,
-      body: {
-        ...adminView.payload,
-        employees: [
-          ...(adminView.payload.employees || []),
-          {
-            id: 3,
-            name: 'Other Employee',
-            initials: 'OE',
-            role: 'Associate',
-            entitlement: 25,
-            entitlementUnit: 'days',
-            rollOver: 0,
-            workingDays: [1, 2, 3, 4, 5],
-            entitlementMode: 'proRata',
-            color: 'peach',
-            status: 'Active',
-            startDate: '2026-01-01',
-            probationEndDate: null,
-          },
-        ],
-        requests: [
-          ...(adminView.payload.requests || []),
-          {
-            id: 501,
-            employeeId: 3,
-            type: 'Annual leave',
-            start: '2026-06-01',
-            end: '2026-06-02',
-            days: 2,
-            status: 'Pending',
-            note: 'private trip',
-          },
-        ],
-        portalMessages: [
-          ...(adminView.payload.portalMessages || []),
-          {
-            id: 9001,
-            employeeId: 3,
-            requestId: 501,
-            author: 'employee',
-            authorName: 'Other Employee',
-            body: 'secret conversation about medical leave',
-            createdAt: '2026-05-01T10:00:00.000Z',
-          },
-        ],
-      },
-    })
+    const seeded = await server.putAppData(adminCookie, (data) => ({
+      ...data,
+      employees: [
+        ...(data.employees || []),
+        {
+          id: 3,
+          name: 'Other Employee',
+          initials: 'OE',
+          role: 'Associate',
+          entitlement: 25,
+          entitlementUnit: 'days',
+          rollOver: 0,
+          workingDays: [1, 2, 3, 4, 5],
+          entitlementMode: 'proRata',
+          color: 'peach',
+          status: 'Active',
+          startDate: '2026-01-01',
+          probationEndDate: null,
+        },
+      ],
+      requests: [
+        ...(data.requests || []),
+        {
+          id: 501,
+          employeeId: 3,
+          type: 'Annual leave',
+          start: '2026-06-01',
+          end: '2026-06-02',
+          days: 2,
+          status: 'Pending',
+          note: 'private trip',
+        },
+      ],
+      portalMessages: [
+        ...(data.portalMessages || []),
+        {
+          id: 9001,
+          employeeId: 3,
+          requestId: 501,
+          author: 'employee',
+          authorName: 'Other Employee',
+          body: 'secret conversation about medical leave',
+          createdAt: '2026-05-01T10:00:00.000Z',
+        },
+      ],
+    }))
     assert.equal(seeded.status, 200)
 
     const employeeView = await server.api('/api/app-data', { cookie: employeeCookie })
@@ -341,26 +320,22 @@ describe('app-data authorization', () => {
       false,
     )
 
-    const attack = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: employeeCookie,
-      body: {
-        ...employeeView.payload,
-        requests: [
-          {
-            id: 501,
-            employeeId: 2,
-            type: 'Annual leave',
-            start: '2026-07-01',
-            end: '2026-07-01',
-            days: 1,
-            status: 'Pending',
-            note: 'spoof',
-          },
-        ],
-        portalMessages: employeeView.payload.portalMessages || [],
-      },
-    })
+    const attack = await server.putAppData(employeeCookie, (data) => ({
+      ...data,
+      requests: [
+        {
+          id: 501,
+          employeeId: 2,
+          type: 'Annual leave',
+          start: '2026-07-01',
+          end: '2026-07-01',
+          days: 1,
+          status: 'Pending',
+          note: 'spoof',
+        },
+      ],
+      portalMessages: data.portalMessages || [],
+    }))
     assert.equal(attack.status, 200)
 
     const afterEmployee = await server.api('/api/app-data', { cookie: employeeCookie })
@@ -401,24 +376,20 @@ describe('app-data authorization', () => {
     assert.equal(employeeView.status, 200)
 
     // Tab A creates a pending expense.
-    const created = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: employeeCookie,
-      body: {
-        ...employeeView.payload,
-        expenseClaims: [
-          ...(employeeView.payload.expenseClaims || []),
-          {
-            id: 8801,
-            employeeId: 2,
-            status: 'Pending',
-            title: 'tab-a expense',
-            amount: 15,
-            date: '2026-09-10',
-          },
-        ],
-      },
-    })
+    const created = await server.putAppData(employeeCookie, (data) => ({
+      ...data,
+      expenseClaims: [
+        ...(data.expenseClaims || []),
+        {
+          id: 8801,
+          employeeId: 2,
+          status: 'Pending',
+          title: 'tab-a expense',
+          amount: 15,
+          date: '2026-09-10',
+        },
+      ],
+    }))
     assert.equal(created.status, 200)
     assert.ok(
       (created.payload.data.expenseClaims || []).some(
@@ -426,13 +397,16 @@ describe('app-data authorization', () => {
       ),
     )
 
-    // Tab B saves an older snapshot that omits that expense — must not delete it.
+    // Tab B body omits that expense but uses the current revision — omit must not delete.
+    const afterCreate = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(afterCreate.status, 200)
     const stale = await server.api('/api/app-data', {
       method: 'PUT',
       cookie: employeeCookie,
       body: {
         ...employeeView.payload,
         expenseClaims: employeeView.payload.expenseClaims || [],
+        _revision: afterCreate.payload.revision,
       },
     })
     assert.equal(stale.status, 200)
@@ -448,72 +422,60 @@ describe('app-data authorization', () => {
   })
 
   test('employee leave/expense creates colliding with another id are remapped and returned', async () => {
-    const adminView = await server.api('/api/app-data', { cookie: adminCookie })
-    const seeded = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: adminCookie,
-      body: {
-        ...adminView.payload,
-        requests: [
-          ...(adminView.payload.requests || []).filter((item) => item.employeeId !== 2),
-          {
-            id: 1,
-            employeeId: 1,
-            type: 'Annual leave',
-            start: '2026-08-01',
-            end: '2026-08-01',
-            days: 1,
-            status: 'Pending',
-            note: 'admin owned id 1',
-          },
-        ],
-        expenseClaims: [
-          ...(adminView.payload.expenseClaims || []).filter((item) => item.employeeId !== 2),
-          {
-            id: 1,
-            employeeId: 1,
-            status: 'Pending',
-            title: 'admin expense',
-            amount: 10,
-            date: '2026-08-01',
-          },
-        ],
-      },
-    })
+    const seeded = await server.putAppData(adminCookie, (data) => ({
+      ...data,
+      requests: [
+        ...(data.requests || []).filter((item) => item.employeeId !== 2),
+        {
+          id: 1,
+          employeeId: 1,
+          type: 'Annual leave',
+          start: '2026-08-01',
+          end: '2026-08-01',
+          days: 1,
+          status: 'Pending',
+          note: 'admin owned id 1',
+        },
+      ],
+      expenseClaims: [
+        ...(data.expenseClaims || []).filter((item) => item.employeeId !== 2),
+        {
+          id: 1,
+          employeeId: 1,
+          status: 'Pending',
+          title: 'admin expense',
+          amount: 10,
+          date: '2026-08-01',
+        },
+      ],
+    }))
     assert.equal(seeded.status, 200)
 
-    const employeeView = await server.api('/api/app-data', { cookie: employeeCookie })
-    assert.equal(employeeView.status, 200)
-
-    const create = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: employeeCookie,
-      body: {
-        ...employeeView.payload,
-        requests: [
-          {
-            id: 1,
-            employeeId: 2,
-            type: 'Annual leave',
-            start: '2026-09-01',
-            end: '2026-09-01',
-            days: 1,
-            status: 'Pending',
-            note: 'employee leave',
-          },
-        ],
-        expenseClaims: [
-          {
-            id: 1,
-            employeeId: 2,
-            status: 'Pending',
-            title: 'employee expense',
-            amount: 22,
-            date: '2026-09-01',
-          },
-        ],
-      },
-    })
+    const create = await server.putAppData(employeeCookie, (data) => ({
+      ...data,
+      requests: [
+        {
+          id: 1,
+          employeeId: 2,
+          type: 'Annual leave',
+          start: '2026-09-01',
+          end: '2026-09-01',
+          days: 1,
+          status: 'Pending',
+          note: 'employee leave',
+        },
+      ],
+      expenseClaims: [
+        {
+          id: 1,
+          employeeId: 2,
+          status: 'Pending',
+          title: 'employee expense',
+          amount: 22,
+          date: '2026-09-01',
+        },
+      ],
+    }))
     assert.equal(create.status, 200)
     assert.ok(create.payload.data)
     assert.ok(
@@ -540,6 +502,109 @@ describe('app-data authorization', () => {
         (claim) => claim.id === 1 && claim.employeeId === 1,
       ),
     )
+  })
+
+  test('stale admin snapshot is rejected with 409', async () => {
+    const firstSnap = await server.api('/api/app-data', { cookie: adminCookie })
+    assert.equal(firstSnap.status, 200)
+    const secondSnap = await server.api('/api/app-data', { cookie: adminCookie })
+    assert.equal(secondSnap.status, 200)
+    assert.equal(firstSnap.payload.revision, secondSnap.payload.revision)
+
+    const firstPut = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: {
+        ...firstSnap.payload,
+        company: {
+          ...firstSnap.payload.company,
+          payrollEmail: 'first-wins@secure.test',
+        },
+        _revision: firstSnap.payload.revision,
+      },
+    })
+    assert.equal(firstPut.status, 200)
+
+    const secondPut = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: {
+        ...secondSnap.payload,
+        company: {
+          ...secondSnap.payload.company,
+          payrollEmail: 'stale-overwrite@secure.test',
+        },
+        _revision: secondSnap.payload.revision,
+      },
+    })
+    assert.equal(secondPut.status, 409)
+
+    const after = await server.api('/api/app-data', { cookie: adminCookie })
+    assert.equal(after.status, 200)
+    assert.equal(after.payload.company.payrollEmail, 'first-wins@secure.test')
+  })
+
+  test('stale employee edit of same pending request is rejected with 409', async () => {
+    const created = await server.putAppData(employeeCookie, (data) => ({
+      ...data,
+      requests: [
+        ...(data.requests || []),
+        {
+          id: 7701,
+          employeeId: 2,
+          type: 'Annual leave',
+          start: '2026-10-01',
+          end: '2026-10-01',
+          days: 1,
+          status: 'Pending',
+          note: 'conflict-original',
+        },
+      ],
+    }))
+    assert.equal(created.status, 200)
+
+    const tabA = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(tabA.status, 200)
+    const tabB = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(tabB.status, 200)
+    assert.equal(tabA.payload.revision, tabB.payload.revision)
+
+    const target = (tabA.payload.requests || []).find(
+      (request) => request.note === 'conflict-original',
+    )
+    assert.ok(target)
+
+    const firstEdit = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: employeeCookie,
+      body: {
+        ...tabA.payload,
+        requests: (tabA.payload.requests || []).map((request) =>
+          request.id === target.id ? { ...request, note: 'first tab wins' } : request,
+        ),
+        _revision: tabA.payload.revision,
+      },
+    })
+    assert.equal(firstEdit.status, 200)
+
+    const secondEdit = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: employeeCookie,
+      body: {
+        ...tabB.payload,
+        requests: (tabB.payload.requests || []).map((request) =>
+          request.id === target.id ? { ...request, note: 'stale tab' } : request,
+        ),
+        _revision: tabB.payload.revision,
+      },
+    })
+    assert.equal(secondEdit.status, 409)
+
+    const after = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(after.status, 200)
+    const kept = (after.payload.requests || []).find((request) => request.id === target.id)
+    assert.ok(kept)
+    assert.equal(kept.note, 'first tab wins')
   })
 
   test('password change revokes previous sessions', async () => {
@@ -611,50 +676,46 @@ describe('multi-tenant isolation', () => {
     assert.ok(betaTenantId)
     assert.notEqual(alphaTenantId, betaTenantId)
 
-    const alphaSeed = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: alphaCookie,
-      body: {
-        company: {
-          name: 'Alpha Ltd',
-          leaveYearConfigured: true,
-          leaveYearStart: 'January',
-          leaveYearEnd: 'December',
-          payrollEmail: 'payroll@alpha.test',
-          twoFactorRequired: 'optional',
-        },
-        employees: [
-          {
-            id: 1,
-            name: 'Alpha Admin',
-            initials: 'AA',
-            role: 'Admin',
-            entitlement: 25,
-            entitlementUnit: 'days',
-            rollOver: 0,
-            workingDays: [1, 2, 3, 4, 5],
-            entitlementMode: 'proRata',
-            color: 'sage',
-            status: 'Active',
-            startDate: '2026-01-01',
-            probationEndDate: null,
-          },
-        ],
-        documentFolders: [],
-        employeeDocuments: [],
-        absences: [],
-        bankHolidays: [],
-        requests: [],
-        portalMessages: [],
-        expenseClaims: [],
-        vatReceipts: [{ id: 1, label: 'alpha-secret' }],
-        taskDismissals: [],
-        policies: [],
-        leaveAdjustments: [],
-        leaveYearClosures: [],
-        auditEvents: [],
+    const alphaSeed = await server.putAppData(alphaCookie, () => ({
+      company: {
+        name: 'Alpha Ltd',
+        leaveYearConfigured: true,
+        leaveYearStart: 'January',
+        leaveYearEnd: 'December',
+        payrollEmail: 'payroll@alpha.test',
+        twoFactorRequired: 'optional',
       },
-    })
+      employees: [
+        {
+          id: 1,
+          name: 'Alpha Admin',
+          initials: 'AA',
+          role: 'Admin',
+          entitlement: 25,
+          entitlementUnit: 'days',
+          rollOver: 0,
+          workingDays: [1, 2, 3, 4, 5],
+          entitlementMode: 'proRata',
+          color: 'sage',
+          status: 'Active',
+          startDate: '2026-01-01',
+          probationEndDate: null,
+        },
+      ],
+      documentFolders: [],
+      employeeDocuments: [],
+      absences: [],
+      bankHolidays: [],
+      requests: [],
+      portalMessages: [],
+      expenseClaims: [],
+      vatReceipts: [{ id: 1, label: 'alpha-secret' }],
+      taskDismissals: [],
+      policies: [],
+      leaveAdjustments: [],
+      leaveYearClosures: [],
+      auditEvents: [],
+    }))
     assert.equal(alphaSeed.status, 200)
 
     const betaView = await server.api('/api/app-data', { cookie: betaCookie })
@@ -668,23 +729,19 @@ describe('multi-tenant isolation', () => {
       false,
     )
 
-    const betaOverwrite = await server.api('/api/app-data', {
-      method: 'PUT',
-      cookie: betaCookie,
-      body: {
-        ...betaView.payload,
-        company: {
-          ...(betaView.payload.company || {}),
-          name: 'Beta Ltd',
-          leaveYearConfigured: true,
-          leaveYearStart: 'January',
-          leaveYearEnd: 'December',
-          payrollEmail: 'payroll@beta.test',
-          twoFactorRequired: 'optional',
-        },
-        vatReceipts: [{ id: 2, label: 'beta-only' }],
+    const betaOverwrite = await server.putAppData(betaCookie, (data) => ({
+      ...data,
+      company: {
+        ...(data.company || {}),
+        name: 'Beta Ltd',
+        leaveYearConfigured: true,
+        leaveYearStart: 'January',
+        leaveYearEnd: 'December',
+        payrollEmail: 'payroll@beta.test',
+        twoFactorRequired: 'optional',
       },
-    })
+      vatReceipts: [{ id: 2, label: 'beta-only' }],
+    }))
     assert.equal(betaOverwrite.status, 200)
 
     const alphaAfter = await server.api('/api/app-data', { cookie: alphaCookie })

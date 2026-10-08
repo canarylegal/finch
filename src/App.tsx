@@ -196,7 +196,9 @@ function App() {
   const pendingAuditAppendRef = useRef<AuditEvent[]>([])
   const persistChainRef = useRef(Promise.resolve(true))
   const persistEpochRef = useRef(0)
+  const suppressPersistRef = useRef(false)
   const appDataSnapshotRef = useRef({
+    revision: 1,
     employees: empty.employees,
     absences: empty.absences,
     company: empty.company,
@@ -214,6 +216,7 @@ function App() {
     leaveYearClosures: empty.leaveYearClosures,
     auditEvents: empty.auditEvents,
   })
+  const [dataRevision, setDataRevision] = useState(1)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('company')
   const [absences, setAbsences] = useState<AbsenceRecord[]>(empty.absences)
   const [bankHolidays, setBankHolidays] = useState<BankHoliday[]>(empty.bankHolidays)
@@ -315,6 +318,9 @@ function App() {
         ? (data.auditEvents as AuditEvent[])
         : fallback.auditEvents,
     )
+    if (typeof data.revision === 'number' && Number.isFinite(data.revision)) {
+      setDataRevision(data.revision)
+    }
     return ensured
   }
 
@@ -343,6 +349,7 @@ function App() {
 
   useEffect(() => {
     appDataSnapshotRef.current = {
+      revision: dataRevision,
       employees,
       absences,
       company,
@@ -362,6 +369,7 @@ function App() {
     }
     persistEpochRef.current += 1
   }, [
+    dataRevision,
     employees,
     absences,
     company,
@@ -448,15 +456,27 @@ function App() {
         leaveYearClosures: overrides.leaveYearClosures ?? snapshot.leaveYearClosures,
         auditEvents: auditSnapshot,
         _auditAppend: appendBatch,
+        _revision: snapshot.revision,
       })
       if (!result.ok) {
         pendingAuditAppendRef.current = [...appendBatch, ...pendingAuditAppendRef.current]
+        if (result.status === 409) {
+          const fresh = await fetchAppData()
+          if (fresh.ok) {
+            suppressPersistRef.current = true
+            applyAppData(fresh.data)
+            notify('Someone else updated this organisation. Your view was refreshed.')
+          }
+        }
         return false
       }
       // If the user edited while this save was in flight, do not clobber newer local
       // state with the older server projection — only apply id remaps.
       if (persistEpochRef.current !== epochAtStart) {
         applyIdRemaps(result.data.idRemap)
+        if (typeof result.data.revision === 'number') {
+          setDataRevision(result.data.revision)
+        }
         if (Array.isArray(result.data.auditEvents)) {
           setAuditEvents(result.data.auditEvents)
         }
@@ -464,8 +484,13 @@ function App() {
       }
       if (result.data.data && typeof result.data.data === 'object') {
         applyAppData(result.data.data)
-      } else if (Array.isArray(result.data.auditEvents)) {
-        setAuditEvents(result.data.auditEvents)
+      } else {
+        if (typeof result.data.revision === 'number') {
+          setDataRevision(result.data.revision)
+        }
+        if (Array.isArray(result.data.auditEvents)) {
+          setAuditEvents(result.data.auditEvents)
+        }
       }
       return true
     }
@@ -522,10 +547,15 @@ function App() {
 
   useEffect(() => {
     if (bootState !== 'ready') return
+    if (suppressPersistRef.current) {
+      suppressPersistRef.current = false
+      return
+    }
     void persistAppData()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- persist when data slices change
   }, [
     bootState,
+    dataRevision,
     employees,
     absences,
     company,

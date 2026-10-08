@@ -34,6 +34,7 @@ export function emptyCompany() {
 
 export function emptyAppData() {
   return {
+    revision: 1,
     employees: [],
     absences: [],
     company: emptyCompany(),

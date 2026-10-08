@@ -113,7 +113,12 @@ export function ensureTenantAppData(store, tenantId) {
   if (!store.appDataByTenant[key]) {
     store.appDataByTenant[key] = emptyAppData()
   }
-  return store.appDataByTenant[key]
+  const appData = store.appDataByTenant[key]
+  const revision = Number(appData.revision)
+  if (!Number.isFinite(revision) || revision < 1) {
+    appData.revision = 1
+  }
+  return appData
 }
 
 export function accountsForTenant(store, tenantId) {
