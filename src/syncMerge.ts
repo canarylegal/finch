@@ -35,6 +35,8 @@ function asArray(value: unknown): Record<string, unknown>[] {
 
 /**
  * Merge one id-keyed collection.
+ * When fieldLevel is true, overlapping record edits are merged field-by-field
+ * (same rules as company settings) instead of taking the whole server record.
  */
 export function mergeCollection(
   baseItems: unknown,
@@ -42,6 +44,7 @@ export function mergeCollection(
   serverItems: unknown,
   collection: string,
   idKey = 'id',
+  { fieldLevel = false }: { fieldLevel?: boolean } = {},
 ): { merged: Record<string, unknown>[]; conflicts: MergeConflict[] } {
   const baseMap = new Map(asArray(baseItems).map((item) => [item?.[idKey], item]))
   const localMap = new Map(asArray(localItems).map((item) => [item?.[idKey], item]))
@@ -66,7 +69,16 @@ export function mergeCollection(
     }
     if (!base && local && server) {
       if (deepEqual(local, server)) merged.push(local)
-      else {
+      else if (fieldLevel) {
+        const fieldMerge = mergeObject({}, local, server, collection)
+        conflicts.push(
+          ...fieldMerge.conflicts.map((item) => ({
+            ...item,
+            id: `${id}.${String(item.id)}`,
+          })),
+        )
+        merged.push({ ...fieldMerge.merged, [idKey]: id })
+      } else {
         conflicts.push({ id, collection, local, server })
         merged.push(server)
       }
@@ -100,6 +112,17 @@ export function mergeCollection(
     }
     if (deepEqual(local, server)) {
       if (local) merged.push(local)
+      continue
+    }
+    if (fieldLevel && local && server && base) {
+      const fieldMerge = mergeObject(base, local, server, collection)
+      conflicts.push(
+        ...fieldMerge.conflicts.map((item) => ({
+          ...item,
+          id: `${id}.${String(item.id)}`,
+        })),
+      )
+      merged.push({ ...fieldMerge.merged, [idKey]: id })
       continue
     }
     conflicts.push({ id, collection, local, server })
@@ -198,7 +221,10 @@ export function mergeAppData(
   conflicts.push(...companyMerge.conflicts)
 
   for (const key of COLLECTION_KEYS) {
-    const result = mergeCollection(baseData?.[key], localData?.[key], serverData?.[key], key)
+    const result = mergeCollection(baseData?.[key], localData?.[key], serverData?.[key], key, 'id', {
+      // Employees are commonly edited on different fields by different admins.
+      fieldLevel: key === 'employees',
+    })
     merged[key] = result.merged
     conflicts.push(...result.conflicts)
   }

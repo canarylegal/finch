@@ -733,38 +733,61 @@ function App() {
     window.setTimeout(() => setToast(''), 2800)
   }
 
-  const discardConflictAndReload = () => {
-    if (!syncConflict) return
-    suppressPersistRef.current = true
-    applyAppData(syncConflict.serverData)
-    setSyncConflict(null)
-    notify('Loaded the latest organisation data')
+  const discardConflictAndReload = async () => {
+    if (!syncConflict || conflictBusy) return
+    setConflictBusy(true)
+    try {
+      const fresh = await fetchAppData()
+      suppressPersistRef.current = true
+      applyAppData(fresh.ok ? fresh.data : syncConflict.serverData)
+      setSyncConflict(null)
+      notify('Loaded the latest organisation data')
+    } finally {
+      setConflictBusy(false)
+    }
   }
 
   const mergeConflictChangesAndSave = async () => {
     if (!syncConflict || conflictBusy) return
     setConflictBusy(true)
     try {
+      // Refresh both sides: local may have changed while the dialog was open, and
+      // another save may have landed on the server in the meantime.
+      const fresh = await fetchAppData()
+      if (!fresh.ok) {
+        notify('Could not refresh organisation data. Try again.')
+        return
+      }
+      const serverRevision =
+        typeof fresh.data.revision === 'number'
+          ? fresh.data.revision
+          : syncConflict.serverRevision
+      const localData = structuredClone(appDataSnapshotRef.current) as Record<string, unknown>
       const { merged, conflicts } = mergeAppData(
         syncConflict.baseData,
-        syncConflict.localData,
-        syncConflict.serverData,
+        localData,
+        fresh.data,
       )
-      const revision = syncConflict.serverRevision
-      const mergedPayload = { ...merged, revision }
-      // Apply merged result (local deltas on top of server). Overlaps keep server values.
+      const mergedPayload = { ...merged, revision: serverRevision }
+      // Apply merged UI state but keep the prior sync base until persist succeeds.
+      // Otherwise a mid-merge 409 would treat the merge as already synced and drop deltas.
       suppressPersistRef.current = true
-      applyAppData(mergedPayload)
+      applyAppData(mergedPayload, { asSyncedBase: false })
       setSyncConflict(null)
-      const saved = await persistAppData({ revision })
+      const saved = await persistAppData({ revision: serverRevision })
       if (saved) {
+        syncedBaseRef.current = structuredClone(
+          appDataSnapshotRef.current,
+        ) as Record<string, unknown>
         notify(
           conflicts.length > 0
-            ? 'Merged your non-conflicting changes. Overlapping fields kept their version.'
+            ? 'Merged your changes. Where the same fields conflicted, their values were kept.'
             : 'Your changes were merged and saved',
         )
       } else {
-        notify('Could not save the merged changes. Try again or load their version.')
+        // Persist may 409 again if another write landed mid-merge; dialog will re-open
+        // using the original synced base so local deltas can be reapplied.
+        notify('Could not save the merged changes. Check the conflict prompt or try again.')
       }
     } finally {
       setConflictBusy(false)
@@ -2649,14 +2672,15 @@ function App() {
             <div className="modal-body">
               <p id="sync-conflict-body">
                 Someone else saved while you were editing. Your unsaved work is still on this
-                screen. Merging reapplies only your changes onto their latest data — it will not
-                resubmit an outdated full snapshot.
+                screen. Merging reapplies only your changes onto their latest data — different
+                fields on the same employee can combine; if you both changed the exact same field,
+                their value is kept.
               </p>
               {syncConflict.overlapSummaries.length > 0 && (
                 <div className="sync-conflict-overlaps">
                   <p>
-                    These items were edited by both of you. Merging will keep their version for
-                    those overlaps:
+                    These fields were edited by both of you. Merging will discard your local value
+                    for them and keep theirs:
                   </p>
                   <ul>
                     {syncConflict.overlapSummaries.map((line) => (
@@ -2671,7 +2695,9 @@ function App() {
                 type="button"
                 className="button button-secondary"
                 disabled={conflictBusy}
-                onClick={discardConflictAndReload}
+                onClick={() => {
+                  void discardConflictAndReload()
+                }}
               >
                 Load their version
               </button>

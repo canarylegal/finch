@@ -61,14 +61,53 @@ describe('syncMerge three-way merge', () => {
     )
   })
 
-  test('overlapping edits on the same employee are reported as conflicts', () => {
+  test('overlapping edits on the same employee field are reported as conflicts', () => {
     const base = { employees: [{ id: 1, name: 'Ada', entitlement: 25 }] }
     const local = { employees: [{ id: 1, name: 'Ada', entitlement: 28 }] }
     const server = { employees: [{ id: 1, name: 'Ada', entitlement: 30 }] }
-    const result = mergeCollection(base.employees, local.employees, server.employees, 'employees')
+    const result = mergeCollection(
+      base.employees,
+      local.employees,
+      server.employees,
+      'employees',
+      'id',
+      { fieldLevel: true },
+    )
     assert.equal(result.conflicts.length, 1)
     assert.equal(result.merged[0].entitlement, 30)
     assert.match(describeConflicts(result.conflicts).join(' '), /employees/)
+  })
+
+  test('different fields on the same employee merge without conflict', () => {
+    const base = {
+      company: { name: 'Firm' },
+      employees: [{ id: 1, name: 'Ada', phone: '111', entitlement: 25 }],
+      requests: [],
+      absences: [],
+      bankHolidays: [],
+      portalMessages: [],
+      documentFolders: [],
+      employeeDocuments: [],
+      expenseClaims: [],
+      vatReceipts: [],
+      taskDismissals: [],
+      policies: [],
+      leaveAdjustments: [],
+      leaveYearClosures: [],
+    }
+    const local = {
+      ...base,
+      employees: [{ id: 1, name: 'Ada', phone: '111', entitlement: 28 }],
+    }
+    const server = {
+      ...base,
+      revision: 2,
+      employees: [{ id: 1, name: 'Ada', phone: '999', entitlement: 25 }],
+    }
+    const result = mergeAppData(base, local, server)
+    assert.equal(result.clean, true)
+    assert.equal(result.merged.employees[0].phone, '999')
+    assert.equal(result.merged.employees[0].entitlement, 28)
   })
 
   test('company field merge keeps unrelated local and server edits', () => {
