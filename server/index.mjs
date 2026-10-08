@@ -452,54 +452,61 @@ app.post('/api/auth/signup', loginLimiter, async (req, res) => {
     return res.status(400).json({ error: 'That login is reserved' })
   }
 
-  const store = await readStore()
-  if (findAccountByEmail(store, email)) {
-    return res.status(409).json({ error: 'An account with that email already exists' })
-  }
-
-  const tenant = createTenant(store, { name: companyName })
-  const appData = ensureTenantAppData(store, tenant.id)
-  appData.company = {
-    ...emptyCompany(),
-    ...appData.company,
-    name: companyName,
-  }
-
+  // Hash outside the store lock so concurrent signups only serialise allocation.
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
-  const account = {
-    id: store.nextAccountId++,
-    tenantId: tenant.id,
-    email,
-    displayName,
-    initials: initialsFromName(displayName),
-    role: 'admin',
-    employeeId: null,
-    status: 'Active',
-    isPrimary: true,
-    passwordHash,
-    mustSetPassword: false,
-    sessionVersion: 0,
-  }
-  store.accounts.push(account)
-  appendAuditEvent(
-    store,
-    createAuditEvent({
-      actorAccountId: account.id,
-      actorName: account.displayName || account.email,
-      action: 'account.signup',
-      summary: `${account.displayName || account.email} created organisation ${companyName}`,
-      entityType: 'account',
-      entityId: account.id,
-    }),
-    tenant.id,
-  )
-  await writeStore(store)
 
-  const token = signAccountSession(account)
+  const created = await updateStore((store) => {
+    if (findAccountByEmail(store, email)) {
+      return { ok: false, status: 409, error: 'An account with that email already exists' }
+    }
+
+    const tenant = createTenant(store, { name: companyName })
+    const appData = ensureTenantAppData(store, tenant.id)
+    appData.company = {
+      ...emptyCompany(),
+      ...appData.company,
+      name: companyName,
+    }
+
+    const account = {
+      id: store.nextAccountId++,
+      tenantId: tenant.id,
+      email,
+      displayName,
+      initials: initialsFromName(displayName),
+      role: 'admin',
+      employeeId: null,
+      status: 'Active',
+      isPrimary: true,
+      passwordHash,
+      mustSetPassword: false,
+      sessionVersion: 0,
+    }
+    store.accounts.push(account)
+    appendAuditEvent(
+      store,
+      createAuditEvent({
+        actorAccountId: account.id,
+        actorName: account.displayName || account.email,
+        action: 'account.signup',
+        summary: `${account.displayName || account.email} created organisation ${companyName}`,
+        entityType: 'account',
+        entityId: account.id,
+      }),
+      tenant.id,
+    )
+    return { ok: true, account, tenant }
+  })
+
+  if (!created?.ok) {
+    return res.status(created?.status || 400).json({ error: created?.error || 'Signup failed' })
+  }
+
+  const token = signAccountSession(created.account)
   setSessionCookie(res, token)
   return res.status(201).json({
-    account: publicAccount(account),
-    tenant: publicTenant(tenant),
+    account: publicAccount(created.account),
+    tenant: publicTenant(created.tenant),
   })
 })
 
@@ -1096,11 +1103,12 @@ app.get('/api/recovery/tenants', async (req, res) => {
 app.post('/api/recovery/tenants', async (req, res) => {
   if (!requireRecovery(req, res)) return
   const name = String(req.body?.name || '').trim() || 'Organisation'
-  const store = await readStore()
-  const tenant = createTenant(store, { name })
-  const appData = ensureTenantAppData(store, tenant.id)
-  appData.company = { ...emptyCompany(), ...appData.company, name }
-  await writeStore(store)
+  const tenant = await updateStore((store) => {
+    const created = createTenant(store, { name })
+    const appData = ensureTenantAppData(store, created.id)
+    appData.company = { ...emptyCompany(), ...appData.company, name }
+    return created
+  })
   return res.status(201).json({ tenant: publicTenant(tenant) })
 })
 
@@ -1140,57 +1148,75 @@ app.post('/api/recovery/accounts', async (req, res) => {
     return res.status(400).json({ error: 'That login is reserved for master recovery' })
   }
 
-  const store = await readStore()
-  if (findAccountByEmail(store, email)) {
-    return res.status(409).json({ error: 'An account with that email already exists' })
-  }
-
-  let tenant = tenantId != null ? getTenant(store, tenantId) : null
-  if (!tenant) {
-    const tenants = listTenants(store)
-    if (tenants.length === 0 || organisationName) {
-      tenant = createTenant(store, { name: organisationName || 'Organisation' })
-      const appData = ensureTenantAppData(store, tenant.id)
-      appData.company = {
-        ...emptyCompany(),
-        ...appData.company,
-        name: organisationName || tenant.name,
-      }
-      tenantId = tenant.id
-    } else if (tenants.length === 1) {
-      tenant = tenants[0]
-      tenantId = tenant.id
-    } else {
-      return res.status(400).json({ error: 'tenantId is required when multiple organisations exist' })
-    }
-  }
-
-  const tenantAccounts = accountsForTenant(store, tenantId)
-  const isFirst = tenantAccounts.length === 0
-  if (isFirst && role !== 'admin') {
-    return res.status(400).json({ error: 'The first account in an organisation must be an admin' })
-  }
-
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
-  const account = {
-    id: store.nextAccountId++,
-    tenantId,
-    email,
-    displayName,
-    initials: initialsFromName(displayName),
-    role,
-    employeeId: null,
-    status: 'Active',
-    jobTitle: req.body?.jobTitle || undefined,
-    isPrimary: isFirst,
-    passwordHash,
-    sessionVersion: 0,
+  const created = await updateStore((store) => {
+    if (findAccountByEmail(store, email)) {
+      return { ok: false, status: 409, error: 'An account with that email already exists' }
+    }
+
+    let tenant = tenantId != null ? getTenant(store, tenantId) : null
+    let resolvedTenantId = tenantId
+    if (!tenant) {
+      const tenants = listTenants(store)
+      if (tenants.length === 0 || organisationName) {
+        tenant = createTenant(store, { name: organisationName || 'Organisation' })
+        const appData = ensureTenantAppData(store, tenant.id)
+        appData.company = {
+          ...emptyCompany(),
+          ...appData.company,
+          name: organisationName || tenant.name,
+        }
+        resolvedTenantId = tenant.id
+      } else if (tenants.length === 1) {
+        tenant = tenants[0]
+        resolvedTenantId = tenant.id
+      } else {
+        return {
+          ok: false,
+          status: 400,
+          error: 'tenantId is required when multiple organisations exist',
+        }
+      }
+    }
+
+    const tenantAccounts = accountsForTenant(store, resolvedTenantId)
+    const isFirst = tenantAccounts.length === 0
+    if (isFirst && role !== 'admin') {
+      return {
+        ok: false,
+        status: 400,
+        error: 'The first account in an organisation must be an admin',
+      }
+    }
+
+    const account = {
+      id: store.nextAccountId++,
+      tenantId: resolvedTenantId,
+      email,
+      displayName,
+      initials: initialsFromName(displayName),
+      role,
+      employeeId: null,
+      status: 'Active',
+      jobTitle: req.body?.jobTitle || undefined,
+      isPrimary: isFirst,
+      passwordHash,
+      sessionVersion: 0,
+    }
+    store.accounts.push(account)
+    return {
+      ok: true,
+      account,
+      tenant: getTenant(store, resolvedTenantId),
+    }
+  })
+
+  if (!created?.ok) {
+    return res.status(created?.status || 400).json({ error: created?.error || 'Create failed' })
   }
-  store.accounts.push(account)
-  await writeStore(store)
   return res.status(201).json({
-    account: publicAccount(account),
-    tenant: publicTenant(getTenant(store, tenantId)),
+    account: publicAccount(created.account),
+    tenant: publicTenant(created.tenant),
   })
 })
 
@@ -1322,7 +1348,7 @@ app.put('/api/app-data', async (req, res) => {
 app.post('/api/accounts', async (req, res) => {
   const ctx = await requireAccount(req, res)
   if (!ctx) return
-  const { account: actor, store } = ctx
+  const { account: actor } = ctx
   if (actor.role !== 'admin') {
     return res.status(403).json({ error: 'Only admins can create accounts' })
   }
@@ -1353,9 +1379,6 @@ app.post('/api/accounts', async (req, res) => {
   if (email === masterConfig.login) {
     return res.status(400).json({ error: 'That login is reserved for master recovery' })
   }
-  if (findAccountByEmail(store, email)) {
-    return res.status(409).json({ error: 'An account with that email already exists' })
-  }
 
   if (invite) {
     const smtp = mailStatusPublic()
@@ -1368,37 +1391,76 @@ app.post('/api/accounts', async (req, res) => {
 
   const placeholderHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), BCRYPT_ROUNDS)
   const passwordHash = invite ? placeholderHash : await bcrypt.hash(password, BCRYPT_ROUNDS)
-  const created = {
-    id: store.nextAccountId++,
-    tenantId: actor.tenantId,
-    email,
-    displayName,
-    initials: initialsFromName(displayName),
-    role,
-    employeeId,
-    status: 'Active',
-    jobTitle: req.body?.jobTitle || undefined,
-    isPrimary: false,
-    passwordHash,
-    mustSetPassword: invite,
-    sessionVersion: 0,
+
+  // For invites, persist first then mail; roll back via a second update if mail fails.
+  const createdResult = await updateStore((store) => {
+    const liveActor = findAccountById(store, actor.id)
+    if (!liveActor || liveActor.status !== 'Active' || liveActor.role !== 'admin') {
+      return { ok: false, status: 401, error: 'Not signed in' }
+    }
+    if (findAccountByEmail(store, email)) {
+      return { ok: false, status: 409, error: 'An account with that email already exists' }
+    }
+
+    const created = {
+      id: store.nextAccountId++,
+      tenantId: liveActor.tenantId,
+      email,
+      displayName,
+      initials: initialsFromName(displayName),
+      role,
+      employeeId,
+      status: 'Active',
+      jobTitle: req.body?.jobTitle || undefined,
+      isPrimary: false,
+      passwordHash,
+      mustSetPassword: invite,
+      sessionVersion: 0,
+    }
+
+    let inviteToken = null
+    if (invite) {
+      inviteToken = issuePasswordSetup(created, 'invite')
+    }
+
+    store.accounts.push(created)
+    appendAuditEvent(
+      store,
+      createAuditEvent({
+        actorAccountId: liveActor.id,
+        actorName: liveActor.displayName || liveActor.email,
+        action: invite ? 'account.invited' : 'account.created',
+        summary: invite
+          ? `${liveActor.displayName || liveActor.email} invited ${displayName} (${role})`
+          : `${liveActor.displayName || liveActor.email} created account ${displayName} (${role})`,
+        entityType: 'account',
+        entityId: created.id,
+      }),
+    )
+    return {
+      ok: true,
+      account: created,
+      inviteToken,
+      orgName: tenantDisplayName(store, created.tenantId),
+      actorName: liveActor.displayName || 'Someone',
+    }
+  })
+
+  if (!createdResult?.ok) {
+    return res
+      .status(createdResult?.status || 400)
+      .json({ error: createdResult?.error || 'Create failed' })
   }
 
-  let inviteToken = null
-  if (invite) {
-    inviteToken = issuePasswordSetup(created, 'invite')
-  }
+  const created = createdResult.account
 
-  store.accounts.push(created)
-
-  if (invite && inviteToken) {
-    const orgName = tenantDisplayName(store, created.tenantId)
-    const setupLink = passwordSetupUrl(req, inviteToken)
+  if (invite && createdResult.inviteToken) {
+    const setupLink = passwordSetupUrl(req, createdResult.inviteToken)
     const mailed = await sendMail({
       to: created.email,
-      subject: `${orgName} — you’re invited to Finch`,
+      subject: `${createdResult.orgName} — you’re invited to Finch`,
       text: [
-        `${actor.displayName || 'Someone'} invited you to ${orgName} on Finch.`,
+        `${createdResult.actorName} invited you to ${createdResult.orgName} on Finch.`,
         '',
         `Set your password here:`,
         setupLink,
@@ -1409,28 +1471,14 @@ app.post('/api/accounts', async (req, res) => {
       ].join('\n'),
     })
     if (!mailed.ok) {
-      // Roll back the unfinished invite so we don’t leave a locked account.
-      store.accounts = store.accounts.filter((item) => item.id !== created.id)
+      await updateStore((store) => {
+        store.accounts = store.accounts.filter((item) => item.id !== created.id)
+      })
       return res.status(503).json({
         error: 'Could not send the invite email. Try again later.',
       })
     }
   }
-
-  appendAuditEvent(
-    store,
-    createAuditEvent({
-      actorAccountId: actor.id,
-      actorName: actor.displayName || actor.email,
-      action: invite ? 'account.invited' : 'account.created',
-      summary: invite
-        ? `${actor.displayName || actor.email} invited ${displayName} (${role})`
-        : `${actor.displayName || actor.email} created account ${displayName} (${role})`,
-      entityType: 'account',
-      entityId: created.id,
-    }),
-  )
-  await writeStore(store)
   res.status(201).json({
     account: publicAccount(created),
     invited: invite,

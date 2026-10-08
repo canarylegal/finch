@@ -231,6 +231,163 @@ describe('app-data authorization', () => {
     assert.equal(beforeAudit.length <= audit.length, true)
   })
 
+  test('employee cannot re-share an internal folder id to expose HR documents', async () => {
+    const employeeView = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(employeeView.status, 200)
+    assert.equal(
+      (employeeView.payload.employeeDocuments || []).some((doc) => doc.id === 101),
+      false,
+    )
+
+    const attack = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: employeeCookie,
+      body: {
+        ...employeeView.payload,
+        documentFolders: [
+          {
+            id: 11,
+            employeeId: 2,
+            name: 'HR file',
+            visibility: 'shared',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+        employeeDocuments: employeeView.payload.employeeDocuments || [],
+      },
+    })
+    assert.equal(attack.status, 200)
+
+    const afterEmployee = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(afterEmployee.status, 200)
+    assert.equal(
+      (afterEmployee.payload.documentFolders || []).some((folder) => folder.id === 11),
+      false,
+    )
+    assert.equal(
+      (afterEmployee.payload.employeeDocuments || []).some(
+        (doc) => doc.id === 101 || doc.title === 'Confidential review',
+      ),
+      false,
+    )
+
+    const afterAdmin = await server.api('/api/app-data', { cookie: adminCookie })
+    assert.equal(afterAdmin.status, 200)
+    const internal = (afterAdmin.payload.documentFolders || []).find((folder) => folder.id === 11)
+    assert.ok(internal)
+    assert.equal(internal.visibility, 'internal')
+  })
+
+  test('employee cannot steal another employee request id to read their messages', async () => {
+    // Add a second employee with a pending request + private thread.
+    const adminView = await server.api('/api/app-data', { cookie: adminCookie })
+    assert.equal(adminView.status, 200)
+    const seeded = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: {
+        ...adminView.payload,
+        employees: [
+          ...(adminView.payload.employees || []),
+          {
+            id: 3,
+            name: 'Other Employee',
+            initials: 'OE',
+            role: 'Associate',
+            entitlement: 25,
+            entitlementUnit: 'days',
+            rollOver: 0,
+            workingDays: [1, 2, 3, 4, 5],
+            entitlementMode: 'proRata',
+            color: 'peach',
+            status: 'Active',
+            startDate: '2026-01-01',
+            probationEndDate: null,
+          },
+        ],
+        requests: [
+          ...(adminView.payload.requests || []),
+          {
+            id: 501,
+            employeeId: 3,
+            type: 'Annual leave',
+            start: '2026-06-01',
+            end: '2026-06-02',
+            days: 2,
+            status: 'Pending',
+            note: 'private trip',
+          },
+        ],
+        portalMessages: [
+          ...(adminView.payload.portalMessages || []),
+          {
+            id: 9001,
+            employeeId: 3,
+            requestId: 501,
+            author: 'employee',
+            authorName: 'Other Employee',
+            body: 'secret conversation about medical leave',
+            createdAt: '2026-05-01T10:00:00.000Z',
+          },
+        ],
+      },
+    })
+    assert.equal(seeded.status, 200)
+
+    const employeeView = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(employeeView.status, 200)
+    assert.equal(
+      (employeeView.payload.portalMessages || []).some((message) => message.id === 9001),
+      false,
+    )
+
+    const attack = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: employeeCookie,
+      body: {
+        ...employeeView.payload,
+        requests: [
+          {
+            id: 501,
+            employeeId: 2,
+            type: 'Annual leave',
+            start: '2026-07-01',
+            end: '2026-07-01',
+            days: 1,
+            status: 'Pending',
+            note: 'spoof',
+          },
+        ],
+        portalMessages: employeeView.payload.portalMessages || [],
+      },
+    })
+    assert.equal(attack.status, 200)
+
+    const afterEmployee = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(afterEmployee.status, 200)
+    assert.equal(
+      (afterEmployee.payload.requests || []).some((request) => request.id === 501),
+      false,
+    )
+    assert.equal(
+      (afterEmployee.payload.portalMessages || []).some(
+        (message) =>
+          message.id === 9001 ||
+          String(message.body || '').includes('secret conversation'),
+      ),
+      false,
+    )
+
+    const afterAdmin = await server.api('/api/app-data', { cookie: adminCookie })
+    assert.equal(afterAdmin.status, 200)
+    const victimRequest = (afterAdmin.payload.requests || []).find((request) => request.id === 501)
+    assert.ok(victimRequest)
+    assert.equal(victimRequest.employeeId, 3)
+    assert.ok(
+      (afterAdmin.payload.portalMessages || []).some((message) => message.id === 9001),
+    )
+  })
+
   test('password change revokes previous sessions', async () => {
     const secondLogin = await server.login('sec-employee@example.com', 'sec-employee-password')
     assert.equal(secondLogin.status, 200)
@@ -389,6 +546,43 @@ describe('multi-tenant isolation', () => {
       (alphaAfter.payload.accounts || []).some((item) => item.email === 'beta-admin@example.com'),
       false,
     )
+  })
+
+  test('concurrent signups allocate distinct tenants and keep sessions isolated', async () => {
+    const [first, second] = await Promise.all([
+      server.api('/api/auth/signup', {
+        method: 'POST',
+        body: {
+          email: 'race-a@example.com',
+          displayName: 'Race A',
+          password: 'race-password-a1',
+          companyName: 'Race A Ltd',
+        },
+      }),
+      server.api('/api/auth/signup', {
+        method: 'POST',
+        body: {
+          email: 'race-b@example.com',
+          displayName: 'Race B',
+          password: 'race-password-b1',
+          companyName: 'Race B Ltd',
+        },
+      }),
+    ])
+    assert.equal(first.status, 201)
+    assert.equal(second.status, 201)
+    assert.notEqual(first.payload.account.id, second.payload.account.id)
+    assert.notEqual(first.payload.account.tenantId, second.payload.account.tenantId)
+    assert.notEqual(first.payload.tenant.id, second.payload.tenant.id)
+
+    const firstCookie = server.cookieHeader(first.cookies)
+    const secondCookie = server.cookieHeader(second.cookies)
+    const firstData = await server.api('/api/app-data', { cookie: firstCookie })
+    const secondData = await server.api('/api/app-data', { cookie: secondCookie })
+    assert.equal(firstData.status, 200)
+    assert.equal(secondData.status, 200)
+    assert.equal(firstData.payload.company?.name, 'Race A Ltd')
+    assert.equal(secondData.payload.company?.name, 'Race B Ltd')
   })
 
   test('legacy single-tenant store migrates on read', async () => {

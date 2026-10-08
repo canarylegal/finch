@@ -62,6 +62,22 @@ function writeJsonStore(store) {
   fs.renameSync(tmp, STORE_PATH)
 }
 
+function assertAccountEmailUniqueness(store) {
+  const seen = new Set()
+  for (const account of store.accounts || []) {
+    const email = String(account?.email || '')
+      .trim()
+      .toLowerCase()
+    if (!email) continue
+    if (seen.has(email)) {
+      const error = new Error(`Duplicate account email: ${email}`)
+      error.code = 'duplicate_email'
+      throw error
+    }
+    seen.add(email)
+  }
+}
+
 async function ensurePostgresSchema(client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS finch_store (
@@ -70,6 +86,29 @@ async function ensurePostgresSchema(client) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS finch_account_emails (
+      email TEXT PRIMARY KEY,
+      account_id INTEGER NOT NULL,
+      tenant_id INTEGER NOT NULL
+    )
+  `)
+}
+
+async function syncAccountEmailLedger(client, store) {
+  assertAccountEmailUniqueness(store)
+  await client.query('DELETE FROM finch_account_emails')
+  for (const account of store.accounts || []) {
+    const email = String(account?.email || '')
+      .trim()
+      .toLowerCase()
+    if (!email) continue
+    await client.query(
+      `INSERT INTO finch_account_emails (email, account_id, tenant_id)
+       VALUES ($1, $2, $3)`,
+      [email, Number(account.id), Number(account.tenantId)],
+    )
+  }
 }
 
 async function migrateJsonIntoPostgres(client) {
@@ -90,6 +129,7 @@ async function migrateJsonIntoPostgres(client) {
     `INSERT INTO finch_store (id, payload, updated_at) VALUES (1, $1::jsonb, NOW())`,
     [JSON.stringify(payload)],
   )
+  await syncAccountEmailLedger(client, payload)
   return true
 }
 
@@ -149,6 +189,8 @@ export async function writeStore(store) {
 
 async function writeStoreUnlocked(store) {
   const normalized = normalizeStore(store)
+  assertAccountEmailUniqueness(normalized)
+
   if (backend === 'json' || !pool) {
     writeJsonStore(normalized)
     return
@@ -164,6 +206,7 @@ async function writeStoreUnlocked(store) {
        SET payload = EXCLUDED.payload, updated_at = NOW()`,
       [JSON.stringify(normalized)],
     )
+    await syncAccountEmailLedger(client, normalized)
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
@@ -176,13 +219,48 @@ async function writeStoreUnlocked(store) {
 /**
  * Atomically read, mutate, and write the store.
  * Prefer this over readStore()+writeStore() when concurrent requests may race.
+ * Postgres path locks the store row for the duration of the mutation.
  */
 export async function updateStore(mutator) {
   return withStoreGate(async () => {
-    const store = await readStoreUnlocked()
-    const result = await mutator(store)
-    await writeStoreUnlocked(store)
-    return result
+    if (backend === 'json' || !pool) {
+      const store = await readStoreUnlocked()
+      const result = await mutator(store)
+      await writeStoreUnlocked(store)
+      return result
+    }
+
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const result = await client.query(
+        'SELECT payload FROM finch_store WHERE id = 1 FOR UPDATE',
+      )
+      let store
+      if (result.rowCount === 0) {
+        store = defaultStore()
+      } else {
+        store = normalizeStore(result.rows[0].payload)
+      }
+      const mutationResult = await mutator(store)
+      const normalized = normalizeStore(store)
+      assertAccountEmailUniqueness(normalized)
+      await client.query(
+        `INSERT INTO finch_store (id, payload, updated_at)
+         VALUES (1, $1::jsonb, NOW())
+         ON CONFLICT (id) DO UPDATE
+         SET payload = EXCLUDED.payload, updated_at = NOW()`,
+        [JSON.stringify(normalized)],
+      )
+      await syncAccountEmailLedger(client, normalized)
+      await client.query('COMMIT')
+      return mutationResult
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally {
+      client.release()
+    }
   })
 }
 
