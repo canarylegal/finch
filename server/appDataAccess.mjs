@@ -149,6 +149,7 @@ function mergeOwnCollection({
   incomingItems,
   belongsToActor,
   canAcceptIncoming,
+  normalizeAccepted,
 }) {
   const server = asArray(serverItems)
   const incoming = asArray(incomingItems)
@@ -196,7 +197,10 @@ function mergeOwnCollection({
     if (claimedIds.has(existing.id)) continue
     claimedIds.add(existing.id)
     idRemap.set(item.id, existing.id)
-    accepted.push({ ...item, id: existing.id })
+    const merged = normalizeAccepted
+      ? normalizeAccepted(item, existing)
+      : { ...item, id: existing.id }
+    accepted.push(merged)
   }
 
   // Omission from a stale client snapshot is not a delete. Keep any server-owned
@@ -218,27 +222,36 @@ function mergeEmployeeRequests(serverRequests, incomingRequests, employeeId) {
     belongsToActor: (item) => item.employeeId === employeeId,
     canAcceptIncoming: (incoming, existing) => {
       if (incoming.employeeId !== employeeId) return false
-      // Employees cannot approve/decline.
-      if (incoming.status === 'Approved' || incoming.status === 'Declined') {
-        return false
-      }
       if (!existing) {
         return incoming.status === 'Pending'
       }
       if (existing.employeeId !== employeeId) return false
-      // Do not let a stale client revert an admin decision.
+      // Amendment proposals on already-approved leave (keep Approved status).
+      if (existing.status === 'Approved' && incoming.status === 'Approved') {
+        return true
+      }
+      // Employees cannot approve/decline, and cannot rewrite terminal decisions.
+      if (incoming.status === 'Approved' || incoming.status === 'Declined') {
+        return false
+      }
       if (
         existing.status === 'Approved' ||
         existing.status === 'Declined' ||
         existing.status === 'Cancelled'
       ) {
-        // Allow amendment proposals / notes on approved leave only.
-        if (existing.status === 'Approved' && incoming.status === 'Approved') {
-          return true
-        }
         return false
       }
       return incoming.status === 'Pending' || incoming.status === 'Cancelled'
+    },
+    normalizeAccepted: (incoming, existing) => {
+      // Preserve server approval fields; only accept the amendment payload.
+      if (existing.status === 'Approved' && incoming.status === 'Approved') {
+        return {
+          ...existing,
+          pendingAmendment: incoming.pendingAmendment,
+        }
+      }
+      return { ...incoming, id: existing.id }
     },
   })
 }

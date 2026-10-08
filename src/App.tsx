@@ -376,6 +376,8 @@ function App() {
       window.setTimeout(() => setToast(''), 2800)
       return false
     }
+    // Initial load must not count as a local edit when boot becomes ready.
+    suppressPersistRef.current = true
     const ensured = applyAppData(result.data)
     for (const accountId of ensured.changedAccountIds) {
       const linked = ensured.accounts.find((item) => item.id === accountId)
@@ -537,7 +539,8 @@ function App() {
         return false
       }
       // If the user edited while this save was in flight, do not clobber newer local
-      // state with the older server projection — only apply id remaps.
+      // state with the older server projection — only apply id remaps. Leave
+      // autosave unsuppressed so the newer local epoch can persist with the new revision.
       if (persistEpochRef.current !== epochAtStart) {
         applyIdRemaps(result.data.idRemap)
         if (typeof result.data.revision === 'number') {
@@ -548,6 +551,9 @@ function App() {
         }
         return true
       }
+      // Acknowledging server state is not a local edit — suppress the persist effect
+      // or applying the response would retrigger an endless save loop.
+      suppressPersistRef.current = true
       if (result.data.data && typeof result.data.data === 'object') {
         applyAppData(result.data.data)
       } else {

@@ -588,7 +588,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const required = policyRequiresTwoFactor(policy, account.role)
   const enabled = accountHasSecondFactor(account)
 
-  if (required && enabled) {
+  // Once enrolled, always challenge — optional policy only skips forced enrollment.
+  if (enabled) {
     setPendingTwoFactorCookie(res, {
       kind: 'pending_2fa',
       accountId: account.id,
@@ -620,7 +621,14 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   return res.json({ account: publicAccount(account) })
 })
 
-app.post('/api/auth/logout', (_req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
+  const session = readAuth(req)
+  if (session?.kind === 'account' && session.accountId != null) {
+    await updateStore((store) => {
+      const account = findAccountById(store, session.accountId)
+      if (account) bumpAccountSessionVersion(account)
+    })
+  }
   clearSessionCookie(res)
   res.json({ ok: true })
 })
