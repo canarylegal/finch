@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "start": "node server/index.mjs",
     "backup": "node scripts/backup.mjs",
-    "test": "node --test test/**/*.test.mjs"
+    "test": "node --experimental-strip-types --test test/**/*.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",

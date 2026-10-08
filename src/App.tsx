@@ -67,6 +67,7 @@ import {
   buildLeaveRequestFields,
 } from './leaveRequestHelpers'
 import { createPortalMessage } from './portalMessages'
+import { describeConflicts, mergeAppData } from './syncMerge'
 import { type Account } from './auth'
 import { LoginPage } from './pages/LoginPage'
 import { LandingPage } from './pages/LandingPage'
@@ -216,6 +217,8 @@ function App() {
     leaveYearClosures: empty.leaveYearClosures,
     auditEvents: empty.auditEvents,
   })
+  /** Last successfully synced server snapshot — base for three-way conflict merges. */
+  const syncedBaseRef = useRef<Record<string, unknown> | null>(null)
   const [dataRevision, setDataRevision] = useState(1)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('company')
   const [absences, setAbsences] = useState<AbsenceRecord[]>(empty.absences)
@@ -238,10 +241,13 @@ function App() {
   const [syncConflict, setSyncConflict] = useState<{
     serverData: Record<string, unknown>
     serverRevision: number
+    baseData: Record<string, unknown>
+    localData: Record<string, unknown>
+    overlapSummaries: string[]
   } | null>(null)
   const [conflictBusy, setConflictBusy] = useState(false)
 
-  const applyAppData = (data: Record<string, unknown>) => {
+  const applyAppData = (data: Record<string, unknown>, { asSyncedBase = true } = {}) => {
     const fallback = emptyRuntimeData()
     const rawAccounts = Array.isArray(data.accounts)
       ? (data.accounts as Account[])
@@ -252,7 +258,10 @@ function App() {
     const rawFolders = Array.isArray(data.documentFolders)
       ? (data.documentFolders as typeof documentFolders)
       : fallback.documentFolders
-    setAbsences(Array.isArray(data.absences) ? (data.absences as AbsenceRecord[]) : fallback.absences)
+    const nextAbsences = Array.isArray(data.absences)
+      ? (data.absences as AbsenceRecord[])
+      : fallback.absences
+    setAbsences(nextAbsences)
     const nextCompany =
       data.company && typeof data.company === 'object'
         ? { ...fallback.company, ...(data.company as CompanySettings) }
@@ -276,55 +285,77 @@ function App() {
     const storedHolidays = Array.isArray(data.bankHolidays)
       ? (data.bankHolidays as BankHoliday[])
       : []
-    setBankHolidays(
+    const nextHolidays =
       storedHolidays.length > 0
         ? storedHolidays
-        : bankHolidaysForRegion(nextCompany.bankHolidayRegion),
-    )
-    setRequests(Array.isArray(data.requests) ? (data.requests as typeof requests) : fallback.requests)
-    setPortalMessages(
-      Array.isArray(data.portalMessages)
-        ? (data.portalMessages as typeof portalMessages)
-        : fallback.portalMessages,
-    )
-    setEmployeeDocuments(
-      Array.isArray(data.employeeDocuments)
-        ? (data.employeeDocuments as typeof employeeDocuments)
-        : fallback.employeeDocuments,
-    )
-    setExpenseClaims(
-      Array.isArray(data.expenseClaims)
-        ? (data.expenseClaims as typeof expenseClaims)
-        : fallback.expenseClaims,
-    )
-    setVatReceipts(
-      Array.isArray(data.vatReceipts)
-        ? (data.vatReceipts as VatReceipt[])
-        : fallback.vatReceipts,
-    )
-    setTaskDismissals(
-      Array.isArray(data.taskDismissals)
-        ? (data.taskDismissals as TaskDismissal[])
-        : fallback.taskDismissals,
-    )
-    setPolicies(Array.isArray(data.policies) ? (data.policies as typeof policies) : fallback.policies)
-    setLeaveAdjustments(
-      Array.isArray(data.leaveAdjustments)
-        ? (data.leaveAdjustments as LeaveAdjustment[])
-        : fallback.leaveAdjustments,
-    )
-    setLeaveYearClosures(
-      Array.isArray(data.leaveYearClosures)
-        ? (data.leaveYearClosures as LeaveYearClosure[])
-        : fallback.leaveYearClosures,
-    )
-    setAuditEvents(
-      Array.isArray(data.auditEvents)
-        ? (data.auditEvents as AuditEvent[])
-        : fallback.auditEvents,
-    )
-    if (typeof data.revision === 'number' && Number.isFinite(data.revision)) {
-      setDataRevision(data.revision)
+        : bankHolidaysForRegion(nextCompany.bankHolidayRegion)
+    setBankHolidays(nextHolidays)
+    const nextRequests = Array.isArray(data.requests)
+      ? (data.requests as typeof requests)
+      : fallback.requests
+    setRequests(nextRequests)
+    const nextMessages = Array.isArray(data.portalMessages)
+      ? (data.portalMessages as typeof portalMessages)
+      : fallback.portalMessages
+    setPortalMessages(nextMessages)
+    const nextDocs = Array.isArray(data.employeeDocuments)
+      ? (data.employeeDocuments as typeof employeeDocuments)
+      : fallback.employeeDocuments
+    setEmployeeDocuments(nextDocs)
+    const nextClaims = Array.isArray(data.expenseClaims)
+      ? (data.expenseClaims as typeof expenseClaims)
+      : fallback.expenseClaims
+    setExpenseClaims(nextClaims)
+    const nextVat = Array.isArray(data.vatReceipts)
+      ? (data.vatReceipts as VatReceipt[])
+      : fallback.vatReceipts
+    setVatReceipts(nextVat)
+    const nextDismissals = Array.isArray(data.taskDismissals)
+      ? (data.taskDismissals as TaskDismissal[])
+      : fallback.taskDismissals
+    setTaskDismissals(nextDismissals)
+    const nextPolicies = Array.isArray(data.policies)
+      ? (data.policies as typeof policies)
+      : fallback.policies
+    setPolicies(nextPolicies)
+    const nextAdjustments = Array.isArray(data.leaveAdjustments)
+      ? (data.leaveAdjustments as LeaveAdjustment[])
+      : fallback.leaveAdjustments
+    setLeaveAdjustments(nextAdjustments)
+    const nextClosures = Array.isArray(data.leaveYearClosures)
+      ? (data.leaveYearClosures as LeaveYearClosure[])
+      : fallback.leaveYearClosures
+    setLeaveYearClosures(nextClosures)
+    const nextAudit = Array.isArray(data.auditEvents)
+      ? (data.auditEvents as AuditEvent[])
+      : fallback.auditEvents
+    setAuditEvents(nextAudit)
+    const nextRevision =
+      typeof data.revision === 'number' && Number.isFinite(data.revision) ? data.revision : 1
+    setDataRevision(nextRevision)
+
+    const snapshot = {
+      revision: nextRevision,
+      employees: ensured.employees,
+      absences: nextAbsences,
+      company: companyWithAt,
+      bankHolidays: nextHolidays,
+      requests: nextRequests,
+      portalMessages: nextMessages,
+      documentFolders: ensured.documentFolders,
+      employeeDocuments: nextDocs,
+      accounts: ensured.accounts,
+      expenseClaims: nextClaims,
+      vatReceipts: nextVat,
+      taskDismissals: nextDismissals,
+      policies: nextPolicies,
+      leaveAdjustments: nextAdjustments,
+      leaveYearClosures: nextClosures,
+      auditEvents: nextAudit,
+    }
+    appDataSnapshotRef.current = snapshot
+    if (asSyncedBase) {
+      syncedBaseRef.current = structuredClone(snapshot) as Record<string, unknown>
     }
     return ensured
   }
@@ -467,7 +498,7 @@ function App() {
       if (!result.ok) {
         pendingAuditAppendRef.current = [...appendBatch, ...pendingAuditAppendRef.current]
         if (result.status === 409) {
-          // Keep local edits — offer a choice instead of silently discarding them.
+          // Keep local edits — offer merge onto server or load their version.
           const fresh = await fetchAppData()
           const serverRevision =
             fresh.ok && typeof fresh.data.revision === 'number'
@@ -476,9 +507,17 @@ function App() {
                 ? result.revision
                 : snapshot.revision
           if (fresh.ok) {
+            const baseData = structuredClone(
+              syncedBaseRef.current || snapshot,
+            ) as Record<string, unknown>
+            const localData = structuredClone(snapshot) as Record<string, unknown>
+            const preview = mergeAppData(baseData, localData, fresh.data)
             setSyncConflict({
               serverData: fresh.data,
               serverRevision,
+              baseData,
+              localData,
+              overlapSummaries: describeConflicts(preview.conflicts),
             })
           } else {
             setToast(
@@ -702,19 +741,30 @@ function App() {
     notify('Loaded the latest organisation data')
   }
 
-  const keepConflictChangesAndRetry = async () => {
+  const mergeConflictChangesAndSave = async () => {
     if (!syncConflict || conflictBusy) return
     setConflictBusy(true)
     try {
+      const { merged, conflicts } = mergeAppData(
+        syncConflict.baseData,
+        syncConflict.localData,
+        syncConflict.serverData,
+      )
       const revision = syncConflict.serverRevision
-      setSyncConflict(null)
+      const mergedPayload = { ...merged, revision }
+      // Apply merged result (local deltas on top of server). Overlaps keep server values.
       suppressPersistRef.current = true
-      setDataRevision(revision)
+      applyAppData(mergedPayload)
+      setSyncConflict(null)
       const saved = await persistAppData({ revision })
       if (saved) {
-        notify('Your changes were saved')
+        notify(
+          conflicts.length > 0
+            ? 'Merged your non-conflicting changes. Overlapping fields kept their version.'
+            : 'Your changes were merged and saved',
+        )
       } else {
-        notify('Could not save your changes. Check the conflict prompt or try again.')
+        notify('Could not save the merged changes. Try again or load their version.')
       }
     } finally {
       setConflictBusy(false)
@@ -2598,9 +2648,23 @@ function App() {
             </div>
             <div className="modal-body">
               <p id="sync-conflict-body">
-                Someone else saved changes while you were editing. Your unsaved work is still on
-                this screen — choose whether to keep it or load their version.
+                Someone else saved while you were editing. Your unsaved work is still on this
+                screen. Merging reapplies only your changes onto their latest data — it will not
+                resubmit an outdated full snapshot.
               </p>
+              {syncConflict.overlapSummaries.length > 0 && (
+                <div className="sync-conflict-overlaps">
+                  <p>
+                    These items were edited by both of you. Merging will keep their version for
+                    those overlaps:
+                  </p>
+                  <ul>
+                    {syncConflict.overlapSummaries.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
             <div className="modal-actions">
               <button
@@ -2616,10 +2680,10 @@ function App() {
                 className="button button-primary"
                 disabled={conflictBusy}
                 onClick={() => {
-                  void keepConflictChangesAndRetry()
+                  void mergeConflictChangesAndSave()
                 }}
               >
-                {conflictBusy ? 'Saving…' : 'Keep mine and save'}
+                {conflictBusy ? 'Saving…' : 'Merge mine onto theirs'}
               </button>
             </div>
           </div>
