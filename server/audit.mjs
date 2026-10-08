@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { ensureTenantAppData, findAccountById } from './tenants.mjs'
 
 export const AUDIT_LOG_LIMIT = 500
 
@@ -49,7 +50,14 @@ export function mergeAuditEvents(existing, incoming) {
     .slice(0, AUDIT_LOG_LIMIT)
 }
 
-export function appendAuditEvent(store, event) {
-  if (!store.appData) store.appData = {}
-  store.appData.auditEvents = mergeAuditEvents(store.appData.auditEvents, [event])
+export function appendAuditEvent(store, event, tenantId) {
+  let resolvedTenantId = tenantId
+  if (resolvedTenantId == null && event?.actorAccountId != null) {
+    resolvedTenantId = findAccountById(store, event.actorAccountId)?.tenantId
+  }
+  if (resolvedTenantId == null) {
+    throw new Error('appendAuditEvent requires tenantId')
+  }
+  const appData = ensureTenantAppData(store, resolvedTenantId)
+  appData.auditEvents = mergeAuditEvents(appData.auditEvents, [event])
 }

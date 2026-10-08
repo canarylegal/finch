@@ -11,6 +11,8 @@ export type StoredLeaveAmendment = {
   duration: string
   note: string
   requestedAt: string
+  startHalf?: 'full' | 'AM' | 'PM'
+  endHalf?: 'full' | 'AM' | 'PM'
 }
 
 export type StoredPortalMessage = {
@@ -70,6 +72,8 @@ export type StoredLeaveRequest = {
   leaveType?: 'annual' | 'unpaid' | 'other'
   start?: string
   end?: string
+  startHalf?: 'full' | 'AM' | 'PM'
+  endHalf?: 'full' | 'AM' | 'PM'
   absenceId?: number
   pendingAmendment?: StoredLeaveAmendment
   source?: 'mandatory'

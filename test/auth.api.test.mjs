@@ -41,10 +41,13 @@ describe('Finch auth API', () => {
         displayName: 'Primary Admin',
         password: 'initial-password-1',
         role: 'admin',
+        organisationName: 'Test Co',
       },
     })
     assert.equal(created.status, 201)
     assert.equal(created.payload.account.isPrimary, true)
+    assert.ok(created.payload.account.tenantId)
+    assert.ok(created.payload.tenant?.id)
 
     const employee = await server.api('/api/recovery/accounts', {
       method: 'POST',
@@ -54,10 +57,12 @@ describe('Finch auth API', () => {
         displayName: 'Employee User',
         password: 'employee-password-1',
         role: 'employee',
+        tenantId: created.payload.tenant.id,
       },
     })
     assert.equal(employee.status, 201)
     assert.equal(employee.payload.account.role, 'employee')
+    assert.equal(employee.payload.account.tenantId, created.payload.tenant.id)
 
     await server.api('/api/auth/logout', { method: 'POST', cookie: recoveryCookie, body: {} })
   })
@@ -116,6 +121,40 @@ describe('Finch auth API', () => {
     })
     assert.equal(result.status, 503)
     assert.match(String(result.payload.error || ''), /email is not configured/i)
+  })
+
+  test('password-setup rejects invalid token', async () => {
+    const result = await server.api('/api/auth/password-setup?token=not-a-real-token')
+    assert.equal(result.status, 400)
+  })
+
+  test('signup creates a separate organisation', async () => {
+    const result = await server.api('/api/auth/signup', {
+      method: 'POST',
+      body: {
+        email: 'newadmin@example.com',
+        displayName: 'New Admin',
+        password: 'signup-password-1',
+        companyName: 'Second Co',
+      },
+    })
+    assert.equal(result.status, 201)
+    assert.equal(result.payload.account.email, 'newadmin@example.com')
+    assert.ok(result.payload.tenant?.id)
+    assert.notEqual(result.payload.account.tenantId, undefined)
+  })
+
+  test('signup rejects duplicate email across organisations', async () => {
+    const result = await server.api('/api/auth/signup', {
+      method: 'POST',
+      body: {
+        email: 'admin@example.com',
+        displayName: 'Dup Admin',
+        password: 'signup-password-2',
+        companyName: 'Dup Co',
+      },
+    })
+    assert.equal(result.status, 409)
   })
 
   test('admin must enrol TOTP then can verify on next login', async () => {
@@ -182,7 +221,15 @@ describe('Finch auth API', () => {
     assert.equal(master.status, 200)
     const recoveryCookie = server.cookieHeader(master.cookies)
 
-    const list = await server.api('/api/recovery/accounts', { cookie: recoveryCookie })
+    const tenants = await server.api('/api/recovery/tenants', { cookie: recoveryCookie })
+    assert.equal(tenants.status, 200)
+    const tenant = tenants.payload.tenants.find((item) => item.name === 'Test Co')
+    assert.ok(tenant)
+
+    const list = await server.api(
+      `/api/recovery/accounts?tenantId=${encodeURIComponent(String(tenant.id))}`,
+      { cookie: recoveryCookie },
+    )
     assert.equal(list.status, 200)
     const admin = list.payload.accounts.find((item) => item.email === 'admin@example.com')
     assert.ok(admin)
@@ -212,7 +259,14 @@ describe('Finch auth API', () => {
       body: { email: 'master-test-login', password: 'master-test-password' },
     })
     const recoveryCookie = server.cookieHeader(master.cookies)
-    const list = await server.api('/api/recovery/accounts', { cookie: recoveryCookie })
+    const tenants = await server.api('/api/recovery/tenants', { cookie: recoveryCookie })
+    const tenant = tenants.payload.tenants.find((item) => item.name === 'Test Co')
+    assert.ok(tenant)
+
+    const list = await server.api(
+      `/api/recovery/accounts?tenantId=${encodeURIComponent(String(tenant.id))}`,
+      { cookie: recoveryCookie },
+    )
     const employee = list.payload.accounts.find((item) => item.email === 'employee@example.com')
     assert.ok(employee)
 
@@ -223,7 +277,10 @@ describe('Finch auth API', () => {
     assert.equal(deleted.status, 200)
     assert.equal(deleted.payload.ok, true)
 
-    const after = await server.api('/api/recovery/accounts', { cookie: recoveryCookie })
+    const after = await server.api(
+      `/api/recovery/accounts?tenantId=${encodeURIComponent(String(tenant.id))}`,
+      { cookie: recoveryCookie },
+    )
     assert.equal(
       after.payload.accounts.some((item) => item.email === 'employee@example.com'),
       false,

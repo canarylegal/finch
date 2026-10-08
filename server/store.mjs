@@ -2,6 +2,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import pg from 'pg'
+import { emptyAppData, emptyCompany } from './appDataShape.mjs'
+import { normalizeStore } from './tenants.mjs'
+
+export { emptyAppData, emptyCompany }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
@@ -28,65 +32,14 @@ function databaseUrl() {
   return (process.env.DATABASE_URL || '').trim()
 }
 
-export function emptyCompany() {
-  return {
-    name: '',
-    logoUrl: null,
-    leaveYearStart: 'January',
-    leaveYearEnd: 'December',
-    leaveYearConfigured: false,
-    leaveYearConfiguredAt: null,
-    mandatoryLeaveConfirmations: [],
-    defaultRollOver: false,
-    defaultEntitlement: 25,
-    defaultEntitlementUnit: 'days',
-    defaultWorkingDays: [1, 2, 3, 4, 5],
-    entitlementIncludesBankHolidays: false,
-    emailNotifications: true,
-    notificationEvents: {
-      leaveRequestSubmitted: true,
-      leaveRequestReviewed: true,
-      expenseClaimSubmitted: true,
-      expenseClaimReviewed: true,
-      probationEnding: true,
-      documentUpdated: true,
-    },
-    twoFactorRequired: 'admins',
-    payrollEmail: '',
-    autoSendPayrollReport: false,
-    autoSendDayOfMonth: 3,
-    lastAutoPayrollSentPeriodEnd: null,
-    payPeriodStartDay: 10,
-    bankHolidayRegion: 'england-wales',
-    adminsCanApproveOwnRequests: false,
-  }
-}
-
-export function emptyAppData() {
-  return {
-    employees: [],
-    absences: [],
-    company: emptyCompany(),
-    bankHolidays: [],
-    requests: [],
-    portalMessages: [],
-    documentFolders: [],
-    employeeDocuments: [],
-    expenseClaims: [],
-    vatReceipts: [],
-    taskDismissals: [],
-    policies: [],
-    leaveAdjustments: [],
-    leaveYearClosures: [],
-    auditEvents: [],
-  }
-}
-
 export function defaultStore() {
   return {
-    accounts: [],
-    appData: emptyAppData(),
+    storeVersion: 2,
+    nextTenantId: 1,
     nextAccountId: 1,
+    tenants: [],
+    accounts: [],
+    appDataByTenant: {},
   }
 }
 
@@ -99,7 +52,7 @@ function ensureJsonFile() {
 
 function readJsonStore() {
   ensureJsonFile()
-  return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'))
+  return normalizeStore(JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')))
 }
 
 function writeJsonStore(store) {
@@ -126,7 +79,7 @@ async function migrateJsonIntoPostgres(client) {
   let payload = defaultStore()
   if (fs.existsSync(STORE_PATH)) {
     try {
-      payload = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'))
+      payload = normalizeStore(JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')))
       console.log('Migrating data/finch-store.json into Postgres')
     } catch (error) {
       console.warn('Could not read finch-store.json for migration:', error?.message || error)
@@ -187,7 +140,7 @@ async function readStoreUnlocked() {
     await writeStoreUnlocked(fresh)
     return fresh
   }
-  return result.rows[0].payload
+  return normalizeStore(result.rows[0].payload)
 }
 
 export async function writeStore(store) {
@@ -195,8 +148,9 @@ export async function writeStore(store) {
 }
 
 async function writeStoreUnlocked(store) {
+  const normalized = normalizeStore(store)
   if (backend === 'json' || !pool) {
-    writeJsonStore(store)
+    writeJsonStore(normalized)
     return
   }
 
@@ -208,7 +162,7 @@ async function writeStoreUnlocked(store) {
        VALUES (1, $1::jsonb, NOW())
        ON CONFLICT (id) DO UPDATE
        SET payload = EXCLUDED.payload, updated_at = NOW()`,
-      [JSON.stringify(store)],
+      [JSON.stringify(normalized)],
     )
     await client.query('COMMIT')
   } catch (error) {

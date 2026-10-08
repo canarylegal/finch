@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -106,5 +106,83 @@ export async function startTestServer(extraEnv = {}) {
     await rm(dataDir, { recursive: true, force: true })
   }
 
-  return { baseUrl, api, cookieHeader, stop, dataDir }
+  async function patchStore(mutator) {
+    const storePath = path.join(dataDir, 'finch-store.json')
+    const store = JSON.parse(await readFile(storePath, 'utf8'))
+    mutator(store)
+    await writeFile(storePath, JSON.stringify(store, null, 2))
+  }
+
+  /** Create primary admin + optional employee; set 2FA policy optional for easier admin login. */
+  async function seedAdminWorkspace({
+    adminEmail = 'admin@example.com',
+    adminPassword = 'admin-password-12',
+    employeeEmail = '',
+    employeePassword = 'employee-password-12',
+  } = {}) {
+    const master = await api('/api/auth/login', {
+      method: 'POST',
+      body: { email: 'master-test-login', password: 'master-test-password' },
+    })
+    const recoveryCookie = cookieHeader(master.cookies)
+    const adminCreate = await api('/api/recovery/accounts', {
+      method: 'POST',
+      cookie: recoveryCookie,
+      body: {
+        email: adminEmail,
+        displayName: 'Test Admin',
+        password: adminPassword,
+        role: 'admin',
+        organisationName: 'Test Co',
+      },
+    })
+    if (adminCreate.status !== 201) {
+      throw new Error(`Failed to create admin: ${adminCreate.status}`)
+    }
+    const tenantId = adminCreate.payload.tenant?.id ?? adminCreate.payload.account?.tenantId
+    if (employeeEmail) {
+      const employeeCreate = await api('/api/recovery/accounts', {
+        method: 'POST',
+        cookie: recoveryCookie,
+        body: {
+          email: employeeEmail,
+          displayName: 'Test Employee',
+          password: employeePassword,
+          role: 'employee',
+          tenantId,
+        },
+      })
+      if (employeeCreate.status !== 201) {
+        throw new Error(`Failed to create employee: ${employeeCreate.status}`)
+      }
+    }
+    await api('/api/auth/logout', { method: 'POST', cookie: recoveryCookie, body: {} })
+    await patchStore((store) => {
+      const admin = store.accounts.find((item) => item.email === adminEmail)
+      const tenantId = admin?.tenantId
+      if (tenantId == null) return
+      store.appDataByTenant = store.appDataByTenant || {}
+      const key = String(tenantId)
+      store.appDataByTenant[key] = store.appDataByTenant[key] || {}
+      store.appDataByTenant[key].company = {
+        ...(store.appDataByTenant[key].company || {}),
+        twoFactorRequired: 'optional',
+        leaveYearConfigured: true,
+        name: 'Test Co',
+      }
+    })
+  }
+
+  async function login(email, password) {
+    const result = await api('/api/auth/login', {
+      method: 'POST',
+      body: { email, password },
+    })
+    return {
+      ...result,
+      cookie: cookieHeader(result.cookies),
+    }
+  }
+
+  return { baseUrl, api, cookieHeader, stop, dataDir, patchStore, seedAdminWorkspace, login }
 }

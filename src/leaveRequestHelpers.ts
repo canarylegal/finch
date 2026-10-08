@@ -1,14 +1,28 @@
 import { formatDisplayDate } from './payroll'
-import type { LeaveAmendment, LeaveRequest } from './domain'
+import type { DayHalf, LeaveAmendment, LeaveRequest } from './domain'
+import { dayHalfLabel } from './leaveDays'
 
-export function formatRequestDates(start: string, end: string) {
-  const startLabel = formatDisplayDate(start)
+export function formatRequestDates(
+  start: string,
+  end: string,
+  startHalf: DayHalf = 'full',
+  endHalf: DayHalf = 'full',
+) {
+  const startSuffix = dayHalfLabel(startHalf)
+  const startLabel = startSuffix
+    ? `${formatDisplayDate(start)} (${startSuffix})`
+    : formatDisplayDate(start)
   if (start === end) return startLabel
-  return `${startLabel} – ${formatDisplayDate(end)}`
+  const endSuffix = dayHalfLabel(endHalf)
+  const endLabel = endSuffix
+    ? `${formatDisplayDate(end)} (${endSuffix})`
+    : formatDisplayDate(end)
+  return `${startLabel} – ${endLabel}`
 }
 
 export function formatRequestDuration(days: number) {
-  return `${days} ${days === 1 ? 'day' : 'days'}`
+  const rounded = Number.isInteger(days) ? days : Math.round(days * 10) / 10
+  return `${rounded} ${rounded === 1 ? 'day' : 'days'}`
 }
 
 export function buildLeaveRequestFields(
@@ -16,11 +30,15 @@ export function buildLeaveRequestFields(
   end: string,
   days: number,
   note: string,
-): Pick<LeaveRequest, 'start' | 'end' | 'dates' | 'duration' | 'note'> {
+  startHalf: DayHalf = 'full',
+  endHalf: DayHalf = 'full',
+): Pick<LeaveRequest, 'start' | 'end' | 'dates' | 'duration' | 'note' | 'startHalf' | 'endHalf'> {
   return {
     start,
     end,
-    dates: formatRequestDates(start, end),
+    startHalf,
+    endHalf,
+    dates: formatRequestDates(start, end, startHalf, endHalf),
     duration: formatRequestDuration(days),
     note,
   }
@@ -31,11 +49,15 @@ export function buildLeaveAmendment(
   end: string,
   days: number,
   note: string,
+  startHalf: DayHalf = 'full',
+  endHalf: DayHalf = 'full',
 ): LeaveAmendment {
   return {
     start,
     end,
-    dates: formatRequestDates(start, end),
+    startHalf,
+    endHalf,
+    dates: formatRequestDates(start, end, startHalf, endHalf),
     duration: formatRequestDuration(days),
     note,
     requestedAt: new Date().toISOString(),

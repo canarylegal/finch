@@ -7,6 +7,7 @@ import {
   ACCEPTED_RECEIPT_ACCEPT,
   EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LABELS,
+  MAX_RECEIPT_LABEL,
   MAX_RECEIPTS_PER_CLAIM,
   isImageReceipt,
   parseAmountInput,
@@ -157,7 +158,7 @@ export function ExpenseClaimModal({ onClose, onSubmit }: ExpenseClaimModalProps)
             <div className="section-heading compact-heading">
               <div>
                 <h2>Receipts</h2>
-                <p>PDF, JPEG, PNG, or WebP · 1.5 MB each · up to {MAX_RECEIPTS_PER_CLAIM}</p>
+                <p>PDF, JPEG, PNG, or WebP · {MAX_RECEIPT_LABEL} each · up to {MAX_RECEIPTS_PER_CLAIM}</p>
               </div>
               <button
                 type="button"

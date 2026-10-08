@@ -25,11 +25,15 @@ type Step = 'credentials' | 'forgot' | 'totp' | 'setupChoice' | 'setup' | 'recov
 export function LoginPage({
   onSignedIn,
   onRecoverySignedIn,
+  initialEmail = '',
+  onBackToLanding,
 }: {
   onSignedIn: (account: PublicAccount) => void
   onRecoverySignedIn: () => void
+  initialEmail?: string
+  onBackToLanding?: () => void
 }) {
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
   const [step, setStep] = useState<Step>('credentials')
@@ -297,6 +301,19 @@ export function LoginPage({
               >
                 Forgot password?
               </button>
+              {onBackToLanding && (
+                <>
+                  <span className="login-forgot-sep">·</span>
+                  <button
+                    type="button"
+                    className="login-forgot-link"
+                    disabled={busy}
+                    onClick={onBackToLanding}
+                  >
+                    About Finch
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}
@@ -305,9 +322,9 @@ export function LoginPage({
           <>
             <h1>Reset password</h1>
             <p className="login-lede">
-              We will email you a temporary password. If you have lost access to two-factor
-              authentication, contact your organisation admin after resetting — they can clear MFA
-              so you can enrol again.
+              We will email a one-time link so you can choose a new password. If you have lost access
+              to two-factor authentication, contact your organisation admin after resetting — they
+              can clear MFA so you can enrol again.
             </p>
             <form className="login-form" onSubmit={handleForgotPassword}>
               <label>
@@ -324,7 +341,7 @@ export function LoginPage({
               {error && <p className="login-error">{error}</p>}
               {forgotMessage && <p className="field-helper">{forgotMessage}</p>}
               <button type="submit" className="button button-primary" disabled={busy}>
-                {busy ? 'Sending…' : 'Email temporary password'}
+                {busy ? 'Sending…' : 'Email reset link'}
                 <ChevronRight size={15} />
               </button>
               <button

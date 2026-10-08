@@ -9,45 +9,14 @@ describe('audit persistence (V1-F1)', () => {
 
   before(async () => {
     server = await startTestServer()
-    const master = await server.api('/api/auth/login', {
-      method: 'POST',
-      body: { email: 'master-test-login', password: 'master-test-password' },
+    await server.seedAdminWorkspace({
+      adminEmail: 'race@example.com',
+      adminPassword: 'race-password-12',
     })
-    const recoveryCookie = server.cookieHeader(master.cookies)
-    await server.api('/api/recovery/accounts', {
-      method: 'POST',
-      cookie: recoveryCookie,
-      body: {
-        email: 'race@example.com',
-        displayName: 'Race Admin',
-        password: 'race-password-12',
-        role: 'admin',
-      },
-    })
-    assert.equal(
-      (
-        await server.api('/api/recovery/accounts', {
-          method: 'POST',
-          cookie: recoveryCookie,
-          body: {
-            email: 'race-emp@example.com',
-            displayName: 'Race Employee',
-            password: 'race-password-12',
-            role: 'employee',
-          },
-        })
-      ).status,
-      201,
-    )
-    await server.api('/api/auth/logout', { method: 'POST', cookie: recoveryCookie, body: {} })
-
-    const login = await server.api('/api/auth/login', {
-      method: 'POST',
-      body: { email: 'race-emp@example.com', password: 'race-password-12' },
-    })
+    const login = await server.login('race@example.com', 'race-password-12')
     assert.equal(login.status, 200)
     assert.ok(login.payload.account)
-    cookie = server.cookieHeader(login.cookies)
+    cookie = login.cookie
   })
 
   after(async () => {
@@ -88,7 +57,7 @@ describe('audit persistence (V1-F1)', () => {
     const settingsBody = {
       ...base.payload,
       company: { ...company, payrollEmail: 'payroll@example.com' },
-      auditEvents: settingsAppend,
+      auditEvents: [],
       _auditAppend: settingsAppend,
     }
 

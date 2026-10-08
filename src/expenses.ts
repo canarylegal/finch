@@ -1,9 +1,10 @@
 import type { ExpenseCategory, ExpenseClaim, ExpenseReceipt, ExpenseStatus } from './domain'
 import { estimateDataUrlSize } from './employeeDocuments'
 
-export const MAX_RECEIPT_BYTES = Math.floor(1.5 * 1024 * 1024)
+export const MAX_RECEIPT_BYTES = Math.floor(5 * 1024 * 1024)
 export const MAX_RECEIPTS_PER_CLAIM = 5
 export const ACCEPTED_RECEIPT_ACCEPT = 'application/pdf,image/jpeg,image/png,image/webp,.pdf,.jpg,.jpeg,.png,.webp'
+export const MAX_RECEIPT_LABEL = '5 MB'
 
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
   'travel',
@@ -112,10 +113,11 @@ function canvasToJpeg(image: HTMLImageElement, maxEdge: number, quality: number)
 async function compressImageDataUrl(dataUrl: string) {
   const image = await loadImage(dataUrl)
   const attempts: Array<{ edge: number; quality: number }> = [
-    { edge: 1600, quality: 0.72 },
-    { edge: 1280, quality: 0.62 },
-    { edge: 1024, quality: 0.52 },
-    { edge: 800, quality: 0.42 },
+    { edge: 1920, quality: 0.82 },
+    { edge: 1600, quality: 0.75 },
+    { edge: 1280, quality: 0.68 },
+    { edge: 1024, quality: 0.58 },
+    { edge: 800, quality: 0.48 },
   ]
   let best = dataUrl
   for (const attempt of attempts) {
@@ -144,14 +146,14 @@ export async function prepareReceiptFile(
 
   const isPdf = isPdfReceipt(file.type, file.name)
   if (isPdf && file.size > MAX_RECEIPT_BYTES) {
-    return { error: 'Each receipt must be 1.5 MB or smaller' }
+    return { error: `Each receipt must be ${MAX_RECEIPT_LABEL} or smaller` }
   }
 
   try {
     const original = await readFileAsDataUrl(file)
     if (isPdf) {
       if (dataUrlTooLarge(original)) {
-        return { error: 'Each receipt must be 1.5 MB or smaller' }
+        return { error: `Each receipt must be ${MAX_RECEIPT_LABEL} or smaller` }
       }
       return {
         receipt: {
@@ -164,7 +166,8 @@ export async function prepareReceiptFile(
 
     let dataUrl = original
     let fileType = file.type || 'image/jpeg'
-    if (dataUrlTooLarge(dataUrl) || file.size > 400 * 1024) {
+    // Always compress camera photos and anything near the limit.
+    if (dataUrlTooLarge(dataUrl) || file.size > 350 * 1024) {
       dataUrl = await compressImageDataUrl(original)
       fileType = 'image/jpeg'
     }

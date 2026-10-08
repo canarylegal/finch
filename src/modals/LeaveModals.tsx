@@ -5,15 +5,16 @@ import {
   appToday,
   companyEntitlementSettings,
   type CompanySettings,
+  type DayHalf,
   type Employee,
 } from '../domain'
 import { formatBalanceAmount, leaveDaysInLeaveYear, remainingAnnualLeave } from '../leaveBalance'
 import type { LeaveAdjustment } from '../leaveAdjustments'
 import { type LeaveYearPeriod } from '../leaveYear'
 import { leaveRequestTypeFromLabel } from '../leaveTypes'
+import { countLeaveWorkingDays, formatHalfDayOption } from '../leaveDays'
 import {
   countWeekdaysInRange,
-  countWorkingDaysInRange,
   formatWorkingWeek,
   type AbsenceRecord,
   type BankHoliday,
@@ -25,6 +26,33 @@ function defaultLeaveDates(today = appToday()) {
     new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1),
   )
   return { start, end }
+}
+
+function HalfDaySelect({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: DayHalf
+  onChange: (value: DayHalf) => void
+}) {
+  return (
+    <label htmlFor={id}>
+      {label}
+      <select
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value as DayHalf)}
+      >
+        <option value="full">{formatHalfDayOption('full')}</option>
+        <option value="AM">{formatHalfDayOption('AM')}</option>
+        <option value="PM">{formatHalfDayOption('PM')}</option>
+      </select>
+    </label>
+  )
 }
 
 export function AdminAddLeaveModal({
@@ -39,20 +67,32 @@ export function AdminAddLeaveModal({
     start: string
     end: string
     leaveType: string
+    startHalf: DayHalf
+    endHalf: DayHalf
+    days: number
   }) => void
 }) {
   const defaults = defaultLeaveDates()
   const [employeeId, setEmployeeId] = useState(employees[0]?.id ?? 0)
   const [startDate, setStartDate] = useState(defaults.start)
   const [endDate, setEndDate] = useState(defaults.end)
+  const [startHalf, setStartHalf] = useState<DayHalf>('full')
+  const [endHalf, setEndHalf] = useState<DayHalf>('full')
   const [leaveType, setLeaveType] = useState('Annual leave')
   const selectedEmployee = employees.find((item) => item.id === employeeId)
+  const singleDay = startDate === endDate
   const dayCount = useMemo(
     () =>
       selectedEmployee
-        ? countWorkingDaysInRange(startDate, endDate, selectedEmployee.workingDays)
+        ? countLeaveWorkingDays(
+            startDate,
+            endDate,
+            selectedEmployee.workingDays,
+            startHalf,
+            singleDay ? startHalf : endHalf,
+          )
         : countWeekdaysInRange(startDate, endDate),
-    [startDate, endDate, selectedEmployee],
+    [startDate, endDate, selectedEmployee, startHalf, endHalf, singleDay],
   )
 
   return (
@@ -101,7 +141,11 @@ export function AdminAddLeaveModal({
               <input
                 type="date"
                 value={startDate}
-                onChange={(event) => setStartDate(event.target.value)}
+                onChange={(event) => {
+                  const next = event.target.value
+                  setStartDate(next)
+                  if (endDate < next) setEndDate(next)
+                }}
               />
             </label>
             <label>
@@ -112,6 +156,22 @@ export function AdminAddLeaveModal({
                 onChange={(event) => setEndDate(event.target.value)}
               />
             </label>
+          </div>
+          <div className="form-row">
+            <HalfDaySelect
+              id="admin-start-half"
+              label={singleDay ? 'Day portion' : 'First day portion'}
+              value={startHalf}
+              onChange={setStartHalf}
+            />
+            {!singleDay && (
+              <HalfDaySelect
+                id="admin-end-half"
+                label="Last day portion"
+                value={endHalf}
+                onChange={setEndHalf}
+              />
+            )}
           </div>
           <div className="days-preview">
             <CalendarDays size={17} />
@@ -135,7 +195,15 @@ export function AdminAddLeaveModal({
             type="button"
             className="button button-primary"
             onClick={() =>
-              onSubmit({ employeeId, start: startDate, end: endDate, leaveType })
+              onSubmit({
+                employeeId,
+                start: startDate,
+                end: endDate,
+                leaveType,
+                startHalf,
+                endHalf: singleDay ? startHalf : endHalf,
+                days: dayCount,
+              })
             }
             disabled={!employeeId || !startDate || !endDate || endDate < startDate || dayCount <= 0}
           >
@@ -172,25 +240,44 @@ export function LeaveModal({
     days: number
     note: string
     leaveType: string
+    startHalf: DayHalf
+    endHalf: DayHalf
   }) => void
 }) {
   const entitlementSettings = companyEntitlementSettings(company)
   const defaults = defaultLeaveDates()
   const [startDate, setStartDate] = useState(defaults.start)
   const [endDate, setEndDate] = useState(defaults.end)
+  const [startHalf, setStartHalf] = useState<DayHalf>('full')
+  const [endHalf, setEndHalf] = useState<DayHalf>('full')
   const [leaveType, setLeaveType] = useState('Annual leave')
   const [note, setNote] = useState('')
+  const singleDay = startDate === endDate
+  const effectiveEndHalf = singleDay ? startHalf : endHalf
   const dayCount = useMemo(
     () =>
       employee
-        ? countWorkingDaysInRange(startDate, endDate, employee.workingDays)
+        ? countLeaveWorkingDays(
+            startDate,
+            endDate,
+            employee.workingDays,
+            startHalf,
+            effectiveEndHalf,
+          )
         : countWeekdaysInRange(startDate, endDate),
-    [startDate, endDate, employee],
+    [startDate, endDate, employee, startHalf, effectiveEndHalf],
   )
   const isAnnual = leaveRequestTypeFromLabel(leaveType) === 'annual'
   const yearDayCount =
     employee && leaveYear
-      ? leaveDaysInLeaveYear(startDate, endDate, leaveYear, employee.workingDays)
+      ? leaveDaysInLeaveYear(
+          startDate,
+          endDate,
+          leaveYear,
+          employee.workingDays,
+          startHalf,
+          effectiveEndHalf,
+        )
       : dayCount
   const remainingAfter =
     employee && isAnnual && yearDayCount > 0
@@ -238,12 +325,36 @@ export function LeaveModal({
           <div className="form-row">
             <label>
               First day
-              <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+              <input
+                type="date"
+                value={startDate}
+                onChange={(event) => {
+                  const next = event.target.value
+                  setStartDate(next)
+                  if (endDate < next) setEndDate(next)
+                }}
+              />
             </label>
             <label>
               Last day
               <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
             </label>
+          </div>
+          <div className="form-row">
+            <HalfDaySelect
+              id="leave-start-half"
+              label={singleDay ? 'Day portion' : 'First day portion'}
+              value={startHalf}
+              onChange={setStartHalf}
+            />
+            {!singleDay && (
+              <HalfDaySelect
+                id="leave-end-half"
+                label="Last day portion"
+                value={endHalf}
+                onChange={setEndHalf}
+              />
+            )}
           </div>
           <div className="days-preview">
             <CalendarDays size={17} />
@@ -290,6 +401,8 @@ export function LeaveModal({
                 days: dayCount,
                 note,
                 leaveType,
+                startHalf,
+                endHalf: effectiveEndHalf,
               })
             }
           >

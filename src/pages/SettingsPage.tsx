@@ -76,7 +76,6 @@ export function SettingsPage({
     email: string
     displayName: string
     role: AccountRole
-    password: string
     jobTitle?: string
   }) => Promise<string | null>
   onSessionAccountUpdated?: (account: PublicAccount) => void
@@ -87,8 +86,7 @@ export function SettingsPage({
   const [showAddAccount, setShowAddAccount] = useState(false)
   const [newAccountEmail, setNewAccountEmail] = useState('')
   const [newAccountName, setNewAccountName] = useState('')
-  const [newAccountRole, setNewAccountRole] = useState<AccountRole>('admin')
-  const [newAccountPassword, setNewAccountPassword] = useState('')
+  const [newAccountRole, setNewAccountRole] = useState<AccountRole>('employee')
   const [addAccountBusy, setAddAccountBusy] = useState(false)
   const [mailStatus, setMailStatus] = useState<{ configured: boolean; from: string | null } | null>(
     null,
@@ -757,12 +755,11 @@ export function SettingsPage({
                   </>
                 ) : (
                   <>
-                    <strong>Email delivery needs SMTP on the server.</strong>
+                    <strong>Email delivery is not configured yet.</strong>
                     <p>
-                      Preferences below are saved and will apply once{' '}
-                      <code>SMTP_HOST</code> and <code>SMTP_FROM</code> are set in the server
-                      environment (optional <code>SMTP_USER</code> / <code>SMTP_PASS</code>). Until
-                      then, Finch shows in-app notices only.
+                      Preferences below are saved and will apply once outbound email is set up on
+                      the server. Until then, Finch shows in-app notices only — invites and password
+                      reset emails will not send.
                     </p>
                   </>
                 )}
@@ -914,6 +911,7 @@ export function SettingsPage({
                           </strong>
                           <span>
                             {account.email} · {account.role}
+                            {account.mustSetPassword ? ' · invite pending' : ''}
                             {account.status === 'Inactive' ? ' · inactive' : ''}
                           </span>
                         </div>
@@ -999,11 +997,15 @@ export function SettingsPage({
                     onClick={() => setShowAddAccount(true)}
                   >
                     <Plus size={15} />
-                    Add account
+                    Invite account
                   </button>
                 ) : (
                   <div className="account-add-form">
-                    <strong className="account-add-heading">New account</strong>
+                    <strong className="account-add-heading">Invite account</strong>
+                    <p className="field-helper">
+                      Sends a set-password link by email. Prefer People → Add employee for new
+                      hires.
+                    </p>
                     <label>
                       Email
                       <input
@@ -1027,17 +1029,9 @@ export function SettingsPage({
                           setNewAccountRole(event.target.value as AccountRole)
                         }
                       >
-                        <option value="admin">Admin</option>
                         <option value="employee">Employee</option>
+                        <option value="admin">Admin</option>
                       </select>
-                    </label>
-                    <label>
-                      Password
-                      <input
-                        type="text"
-                        value={newAccountPassword}
-                        onChange={(event) => setNewAccountPassword(event.target.value)}
-                      />
                     </label>
                     {newAccountRole === 'admin' && currentIsPrimary && (
                       <label className="toggle-row account-add-approval-policy">
@@ -1078,7 +1072,6 @@ export function SettingsPage({
                             email: newAccountEmail,
                             displayName: newAccountName,
                             role: newAccountRole,
-                            password: newAccountPassword,
                           })
                           setAddAccountBusy(false)
                           if (error) {
@@ -1102,25 +1095,14 @@ export function SettingsPage({
                           setShowAddAccount(false)
                           setNewAccountEmail('')
                           setNewAccountName('')
-                          setNewAccountRole('admin')
-                          setNewAccountPassword('')
+                          setNewAccountRole('employee')
                         }}
                       >
-                        Create account
+                        Send invite
                       </button>
                     </div>
                   </div>
                 )}
-              </div>
-              <div className="settings-divider" />
-              <div className="settings-section settings-section-stack">
-                <div>
-                  <h2>Data management</h2>
-                  <p>
-                    Use master recovery sign-in to manage break-glass account access after a
-                    deployment wipe.
-                  </p>
-                </div>
               </div>
             </>
           )}

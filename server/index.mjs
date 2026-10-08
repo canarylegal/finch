@@ -17,7 +17,6 @@ import {
 } from './email.mjs'
 import {
   closeStore,
-  defaultStore,
   emptyAppData,
   emptyCompany,
   getStoreBackend,
@@ -39,7 +38,6 @@ import {
 import {
   appendAuditEvent,
   createAuditEvent,
-  mergeAuditEvents,
 } from './audit.mjs'
 import {
   accountHasPasskey,
@@ -52,6 +50,24 @@ import {
   verifyAndStoreRegistration,
   verifyAuthentication,
 } from './webauthn.mjs'
+import {
+  clearPasswordSetup,
+  findAccountByPasswordSetupToken,
+  issuePasswordSetup,
+  passwordSetupUrl,
+} from './passwordSetup.mjs'
+import { applyAppDataWrite, projectAppDataForViewer } from './appDataAccess.mjs'
+import {
+  accountsForTenant,
+  createTenant,
+  ensureTenantAppData,
+  findAccountByEmail,
+  findAccountById,
+  getTenant,
+  listTenants,
+  publicTenant,
+  tenantDisplayName,
+} from './tenants.mjs'
 
 dotenv.config()
 
@@ -105,9 +121,11 @@ function publicAccount(account) {
     initials: account.initials,
     role: account.role,
     employeeId: account.employeeId,
+    tenantId: account.tenantId ?? null,
     status: account.status,
     jobTitle: account.jobTitle,
     isPrimary: Boolean(account.isPrimary),
+    mustSetPassword: Boolean(account.mustSetPassword),
     ...publicTotpStatus(account),
     ...publicPasskeyStatus(account),
   }
@@ -124,6 +142,27 @@ function initialsFromName(name) {
 
 function signToken(payload, expiresIn = '12h') {
   return jwt.sign(payload, SESSION_SECRET, { expiresIn })
+}
+
+function accountSessionVersion(account) {
+  return typeof account?.sessionVersion === 'number' ? account.sessionVersion : 0
+}
+
+function signAccountSession(account, expiresIn = '12h') {
+  return signToken(
+    {
+      kind: 'account',
+      accountId: account.id,
+      tenantId: account.tenantId,
+      sv: accountSessionVersion(account),
+    },
+    expiresIn,
+  )
+}
+
+function bumpAccountSessionVersion(account) {
+  account.sessionVersion = accountSessionVersion(account) + 1
+  return account.sessionVersion
 }
 
 function setSessionCookie(res, token, maxAgeMs = 12 * 60 * 60 * 1000) {
@@ -153,8 +192,8 @@ function readAuth(req) {
   }
 }
 
-function companyTwoFactorPolicy(store) {
-  const policy = store.appData?.company?.twoFactorRequired
+function companyTwoFactorPolicy(store, tenantId) {
+  const policy = ensureTenantAppData(store, tenantId)?.company?.twoFactorRequired
   if (policy === 'all' || policy === 'admins' || policy === 'optional') return policy
   return 'admins'
 }
@@ -213,16 +252,6 @@ const forgotPasswordLimiter = rateLimit({
   message: { error: 'Too many password reset requests. Try again later.' },
 })
 
-function generateTemporaryPassword(length = 16) {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%'
-  const bytes = crypto.randomBytes(length)
-  let out = ''
-  for (let i = 0; i < length; i += 1) {
-    out += alphabet[bytes[i] % alphabet.length]
-  }
-  return out
-}
-
 app.get('/api/health', async (_req, res) => {
   try {
     await readStore()
@@ -235,14 +264,30 @@ app.get('/api/health', async (_req, res) => {
 app.get('/api/bootstrap', async (req, res) => {
   const store = await readStore()
   const session = readAuth(req)
+  let orgConfigured = false
+  let companyName = ''
+  let tenantId = null
+  if (session?.kind === 'account' && session.accountId != null) {
+    const account = findAccountById(store, session.accountId)
+    if (account?.tenantId != null) {
+      tenantId = account.tenantId
+      const appData = ensureTenantAppData(store, account.tenantId)
+      orgConfigured = Boolean(appData.company?.leaveYearConfigured)
+      companyName = appData.company?.name || getTenant(store, account.tenantId)?.name || ''
+    }
+  }
   res.json({
+    multiTenant: true,
+    canCreateOrganisation: true,
+    organisationCount: listTenants(store).length,
     hasAccounts: store.accounts.length > 0,
-    orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
-    companyName: store.appData?.company?.name || '',
+    orgConfigured,
+    companyName,
     session: session
       ? {
           kind: session.kind,
           accountId: session.accountId ?? null,
+          tenantId: session.tenantId ?? tenantId,
         }
       : null,
   })
@@ -259,7 +304,7 @@ app.post('/api/auth/forgot-password', forgotPasswordLimiter, async (req, res) =>
   const generic = {
     ok: true,
     message:
-      'If an account exists for that email, a temporary password has been sent. Check your inbox.',
+      'If an account exists for that email, a set-password link has been sent. Check your inbox.',
   }
 
   // Never reset the env master recovery login via this flow.
@@ -275,41 +320,34 @@ app.post('/api/auth/forgot-password', forgotPasswordLimiter, async (req, res) =>
   }
 
   const store = await readStore()
-  const account = store.accounts.find((item) => item.email === email)
+  const account = findAccountByEmail(store, email)
   if (!account || account.status !== 'Active') {
     return res.json(generic)
   }
 
-  const temporaryPassword = generateTemporaryPassword()
-  const passwordHash = await bcrypt.hash(temporaryPassword, BCRYPT_ROUNDS)
-
-  const orgName = store.appData?.company?.name?.trim() || 'Finch'
+  const token = issuePasswordSetup(account, 'reset')
+  const setupLink = passwordSetupUrl(req, token)
+  const orgName = tenantDisplayName(store, account.tenantId)
   const hasMfa = accountHasSecondFactor(account)
   const lines = [
-    `A temporary password was created for your ${orgName} Finch account.`,
+    `Reset your ${orgName} Finch password using this link:`,
     '',
-    `Email: ${account.email}`,
-    `Temporary password: ${temporaryPassword}`,
+    setupLink,
     '',
-    'Sign in with this temporary password.',
+    'This link expires in 7 days and can only be used once.',
   ]
   if (hasMfa) {
     lines.push(
       '',
-      'If you still have your authenticator or passkey, use it after signing in as usual.',
+      'After setting a new password, sign in and complete two-factor authentication as usual.',
       'If you have lost access to two-factor authentication, contact your organisation admin — they can clear MFA so you can enrol again.',
     )
-  } else {
-    lines.push(
-      '',
-      'If your organisation requires two-factor authentication and you cannot complete sign-in, contact your organisation admin.',
-    )
   }
-  lines.push('', 'If you did not request this reset, contact an admin immediately.')
+  lines.push('', 'If you did not request this reset, you can ignore this email.')
 
   const mailed = await sendMail({
     to: account.email,
-    subject: `${orgName} — temporary password`,
+    subject: `${orgName} — reset your password`,
     text: lines.join('\n'),
   })
   if (!mailed.ok) {
@@ -318,20 +356,151 @@ app.post('/api/auth/forgot-password', forgotPasswordLimiter, async (req, res) =>
     })
   }
 
-  account.passwordHash = passwordHash
   appendAuditEvent(
     store,
     createAuditEvent({
       actorAccountId: account.id,
       actorName: account.displayName || account.email,
       action: 'auth.password.reset_email',
-      summary: `${account.displayName || account.email} requested a temporary password by email`,
+      summary: `${account.displayName || account.email} requested a password reset link by email`,
       entityType: 'account',
       entityId: account.id,
     }),
   )
   await writeStore(store)
   return res.json(generic)
+})
+
+app.get('/api/auth/password-setup', async (req, res) => {
+  const token = String(req.query?.token || '').trim()
+  const store = await readStore()
+  const found = findAccountByPasswordSetupToken(store, token)
+  if (!found.ok) {
+    const message =
+      found.reason === 'expired'
+        ? 'This link has expired. Ask an admin to send a new invite, or use Forgot password.'
+        : 'This set-password link is invalid or has already been used.'
+    return res.status(400).json({ error: message })
+  }
+  return res.json({
+    ok: true,
+    email: found.account.email,
+    displayName: found.account.displayName,
+    purpose: found.purpose,
+  })
+})
+
+app.post('/api/auth/password-setup', forgotPasswordLimiter, async (req, res) => {
+  const token = String(req.body?.token || '').trim()
+  const password = String(req.body?.password || '')
+  if (!token || !password) {
+    return res.status(400).json({ error: 'Token and password are required' })
+  }
+  if (password.length < 10) {
+    return res.status(400).json({ error: 'Password must be at least 10 characters' })
+  }
+
+  const store = await readStore()
+  const found = findAccountByPasswordSetupToken(store, token)
+  if (!found.ok) {
+    const message =
+      found.reason === 'expired'
+        ? 'This link has expired. Ask an admin to send a new invite, or use Forgot password.'
+        : 'This set-password link is invalid or has already been used.'
+    return res.status(400).json({ error: message })
+  }
+
+  const account = found.account
+  account.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
+  account.mustSetPassword = false
+  clearPasswordSetup(account)
+  bumpAccountSessionVersion(account)
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'auth.password.set',
+      summary: `${account.displayName || account.email} set their password via ${found.purpose} link`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+  )
+  await writeStore(store)
+  return res.json({
+    ok: true,
+    message: 'Password set. You can sign in now.',
+    email: account.email,
+  })
+})
+
+app.post('/api/auth/signup', loginLimiter, async (req, res) => {
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase()
+  const displayName = String(req.body?.displayName || '').trim()
+  const password = String(req.body?.password || '')
+  const companyName = String(req.body?.companyName || '').trim() || 'Organisation'
+
+  if (!email || !displayName || !password) {
+    return res.status(400).json({ error: 'Email, name, and password are required' })
+  }
+  if (password.length < 10) {
+    return res.status(400).json({ error: 'Password must be at least 10 characters' })
+  }
+  if (email === masterConfig.login) {
+    return res.status(400).json({ error: 'That login is reserved' })
+  }
+
+  const store = await readStore()
+  if (findAccountByEmail(store, email)) {
+    return res.status(409).json({ error: 'An account with that email already exists' })
+  }
+
+  const tenant = createTenant(store, { name: companyName })
+  const appData = ensureTenantAppData(store, tenant.id)
+  appData.company = {
+    ...emptyCompany(),
+    ...appData.company,
+    name: companyName,
+  }
+
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
+  const account = {
+    id: store.nextAccountId++,
+    tenantId: tenant.id,
+    email,
+    displayName,
+    initials: initialsFromName(displayName),
+    role: 'admin',
+    employeeId: null,
+    status: 'Active',
+    isPrimary: true,
+    passwordHash,
+    mustSetPassword: false,
+    sessionVersion: 0,
+  }
+  store.accounts.push(account)
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: account.id,
+      actorName: account.displayName || account.email,
+      action: 'account.signup',
+      summary: `${account.displayName || account.email} created organisation ${companyName}`,
+      entityType: 'account',
+      entityId: account.id,
+    }),
+    tenant.id,
+  )
+  await writeStore(store)
+
+  const token = signAccountSession(account)
+  setSessionCookie(res, token)
+  return res.status(201).json({
+    account: publicAccount(account),
+    tenant: publicTenant(tenant),
+  })
 })
 
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
@@ -354,7 +523,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
         requires2fa: true,
         challenge: 'master',
         displayName: 'Master recovery',
-        hasAccounts: recoveryStore.accounts.length > 0,
+        organisationCount: listTenants(recoveryStore).length,
       })
     }
     const token = signToken({ kind: 'master_recovery' })
@@ -362,29 +531,40 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
     return res.json({
       recovery: true,
       displayName: 'Master recovery',
-      hasAccounts: recoveryStore.accounts.length > 0,
+      organisationCount: listTenants(recoveryStore).length,
+      tenants: listTenants(recoveryStore).map(publicTenant),
     })
   }
 
   const store = await readStore()
-  const account = store.accounts.find((item) => item.email === email)
+  const account = findAccountByEmail(store, email)
   if (!account) {
     return res.status(401).json({ error: 'Email or password is incorrect' })
   }
   if (account.status !== 'Active') {
     return res.status(403).json({ error: 'This account is inactive. Contact an admin.' })
   }
+  if (account.mustSetPassword || !account.passwordHash) {
+    return res.status(403).json({
+      error:
+        'This account still needs a password. Open the invite link from your email, or ask an admin to resend it.',
+    })
+  }
   const ok = await bcrypt.compare(password, account.passwordHash)
   if (!ok) {
     return res.status(401).json({ error: 'Email or password is incorrect' })
   }
 
-  const policy = companyTwoFactorPolicy(store)
+  const policy = companyTwoFactorPolicy(store, account.tenantId)
   const required = policyRequiresTwoFactor(policy, account.role)
   const enabled = accountHasSecondFactor(account)
 
   if (required && enabled) {
-    setPendingTwoFactorCookie(res, { kind: 'pending_2fa', accountId: account.id })
+    setPendingTwoFactorCookie(res, {
+      kind: 'pending_2fa',
+      accountId: account.id,
+      tenantId: account.tenantId,
+    })
     return res.json({
       requires2fa: true,
       challenge: 'account',
@@ -395,14 +575,18 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   }
 
   if (required && !enabled) {
-    setPendingTwoFactorCookie(res, { kind: 'pending_2fa_setup', accountId: account.id })
+    setPendingTwoFactorCookie(res, {
+      kind: 'pending_2fa_setup',
+      accountId: account.id,
+      tenantId: account.tenantId,
+    })
     return res.json({
       mustSetup2fa: true,
       account: publicAccount(account),
     })
   }
 
-  const token = signToken({ kind: 'account', accountId: account.id })
+  const token = signAccountSession(account)
   setSessionCookie(res, token)
   return res.json({ account: publicAccount(account) })
 })
@@ -418,7 +602,7 @@ app.get('/api/auth/me', async (req, res) => {
 
   if (session.kind === 'pending_2fa' || session.kind === 'pending_2fa_setup') {
     const store = await readStore()
-    const account = store.accounts.find((item) => item.id === session.accountId)
+    const account = findAccountById(store, session.accountId)
     if (!account || account.status !== 'Active') {
       clearSessionCookie(res)
       return res.status(401).json({ error: 'Not signed in' })
@@ -426,7 +610,7 @@ app.get('/api/auth/me', async (req, res) => {
     return res.json({
       kind: session.kind,
       account: publicAccount(account),
-      orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
+      orgConfigured: account?.tenantId != null ? Boolean(ensureTenantAppData(store, account.tenantId).company?.leaveYearConfigured) : false,
     })
   }
 
@@ -435,8 +619,9 @@ app.get('/api/auth/me', async (req, res) => {
     return res.json({
       kind: 'pending_2fa_master',
       displayName: 'Master recovery',
-      hasAccounts: store.accounts.length > 0,
-      orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
+      organisationCount: listTenants(store).length,
+      tenants: listTenants(store).map(publicTenant),
+      orgConfigured: false,
     })
   }
 
@@ -445,8 +630,9 @@ app.get('/api/auth/me', async (req, res) => {
     return res.json({
       kind: 'master_recovery',
       displayName: 'Master recovery',
-      hasAccounts: store.accounts.length > 0,
-      orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
+      organisationCount: listTenants(store).length,
+      tenants: listTenants(store).map(publicTenant),
+      orgConfigured: false,
     })
   }
   if (session.kind !== 'account') {
@@ -454,7 +640,7 @@ app.get('/api/auth/me', async (req, res) => {
     return res.status(401).json({ error: 'Not signed in' })
   }
   const store = await readStore()
-  const account = store.accounts.find((item) => item.id === session.accountId)
+  const account = findAccountById(store, session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
     return res.status(401).json({ error: 'Not signed in' })
@@ -462,7 +648,7 @@ app.get('/api/auth/me', async (req, res) => {
   return res.json({
     kind: 'account',
     account: publicAccount(account),
-    orgConfigured: Boolean(store.appData?.company?.leaveYearConfigured),
+    orgConfigured: account?.tenantId != null ? Boolean(ensureTenantAppData(store, account.tenantId).company?.leaveYearConfigured) : false,
   })
 })
 
@@ -482,10 +668,25 @@ async function requireAccount(req, res) {
     return null
   }
   const store = await readStore()
-  const account = store.accounts.find((item) => item.id === session.accountId)
+  const account = findAccountById(store, session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
     res.status(401).json({ error: 'Not signed in' })
+    return null
+  }
+  if ((session.sv ?? 0) !== accountSessionVersion(account)) {
+    clearSessionCookie(res)
+    res.status(401).json({ error: 'Session expired. Sign in again.' })
+    return null
+  }
+  if (account.tenantId == null) {
+    clearSessionCookie(res)
+    res.status(401).json({ error: 'Account is not linked to an organisation' })
+    return null
+  }
+  if (session.tenantId != null && session.tenantId !== account.tenantId) {
+    clearSessionCookie(res)
+    res.status(401).json({ error: 'Session expired. Sign in again.' })
     return null
   }
   return { session, account, store }
@@ -501,10 +702,18 @@ async function requireAccountOrSetup(req, res) {
     return null
   }
   const store = await readStore()
-  const account = store.accounts.find((item) => item.id === session.accountId)
+  const account = findAccountById(store, session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
     res.status(401).json({ error: 'Not signed in' })
+    return null
+  }
+  if (
+    session.kind === 'account' &&
+    (session.sv ?? 0) !== accountSessionVersion(account)
+  ) {
+    clearSessionCookie(res)
+    res.status(401).json({ error: 'Session expired. Sign in again.' })
     return null
   }
   return { session, account, store }
@@ -532,7 +741,8 @@ app.post('/api/auth/2fa/verify', twoFactorLimiter, async (req, res) => {
     return res.json({
       recovery: true,
       displayName: 'Master recovery',
-      hasAccounts: store.accounts.length > 0,
+      organisationCount: listTenants(store).length,
+      tenants: listTenants(store).map(publicTenant),
     })
   }
 
@@ -541,7 +751,7 @@ app.post('/api/auth/2fa/verify', twoFactorLimiter, async (req, res) => {
   }
 
   const store = await readStore()
-  const account = store.accounts.find((item) => item.id === session.accountId)
+  const account = findAccountById(store, session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
     return res.status(401).json({ error: 'Not signed in' })
@@ -554,7 +764,7 @@ app.post('/api/auth/2fa/verify', twoFactorLimiter, async (req, res) => {
   }
   if (!ok) return res.status(401).json({ error: 'Invalid authentication code' })
 
-  const token = signToken({ kind: 'account', accountId: account.id })
+  const token = signAccountSession(account)
   setSessionCookie(res, token)
   return res.json({ account: publicAccount(account) })
 })
@@ -568,7 +778,7 @@ app.post('/api/auth/2fa/setup', async (req, res) => {
   account.totpPendingSecret = secret
   await writeStore(store)
 
-  const issuer = store.appData?.company?.name?.trim() || 'Finch'
+  const issuer = tenantDisplayName(store, account.tenantId)
   const uri = buildTotpUri({ secret, email: account.email, issuer })
   const qrDataUrl = await totpQrDataUrl(uri)
   return res.json({
@@ -609,7 +819,7 @@ app.post('/api/auth/2fa/confirm', twoFactorLimiter, async (req, res) => {
   await writeStore(store)
 
   if (session.kind === 'pending_2fa_setup') {
-    const token = signToken({ kind: 'account', accountId: account.id })
+    const token = signAccountSession(account)
     setSessionCookie(res, token)
   }
 
@@ -636,7 +846,7 @@ app.post('/api/auth/2fa/disable', async (req, res) => {
     if (!codeOk) return res.status(401).json({ error: 'Invalid authentication code' })
   }
 
-  const policy = companyTwoFactorPolicy(store)
+  const policy = companyTwoFactorPolicy(store, account.tenantId)
   const stillHasPasskey = accountHasPasskey(account)
   if (policyRequiresTwoFactor(policy, account.role) && !stillHasPasskey) {
     return res.status(400).json({
@@ -666,7 +876,7 @@ app.post('/api/auth/2fa/disable', async (req, res) => {
 app.get('/api/auth/2fa/status', async (req, res) => {
   const ctx = await requireAccountOrSetup(req, res)
   if (!ctx) return
-  const policy = companyTwoFactorPolicy(ctx.store)
+  const policy = companyTwoFactorPolicy(ctx.store, ctx.account.tenantId)
   return res.json({
     ...publicTotpStatus(ctx.account),
     ...publicPasskeyStatus(ctx.account),
@@ -682,7 +892,7 @@ app.post('/api/auth/webauthn/register/options', async (req, res) => {
   if (!ctx) return
   const config = resolveWebAuthnConfig({
     req,
-    companyName: ctx.store.appData?.company?.name,
+    companyName: tenantDisplayName(ctx.store, ctx.account.tenantId),
   })
   const options = await createRegistrationOptions({ account: ctx.account, config })
   return res.json(options)
@@ -694,7 +904,7 @@ app.post('/api/auth/webauthn/register/verify', twoFactorLimiter, async (req, res
   const { account, store, session } = ctx
   const config = resolveWebAuthnConfig({
     req,
-    companyName: store.appData?.company?.name,
+    companyName: tenantDisplayName(store, account.tenantId),
   })
   const result = await verifyAndStoreRegistration({
     account,
@@ -726,7 +936,7 @@ app.post('/api/auth/webauthn/register/verify', twoFactorLimiter, async (req, res
   await writeStore(store)
 
   if (session.kind === 'pending_2fa_setup') {
-    const token = signToken({ kind: 'account', accountId: account.id })
+    const token = signAccountSession(account)
     setSessionCookie(res, token)
   }
 
@@ -742,14 +952,14 @@ app.post('/api/auth/webauthn/authenticate/options', twoFactorLimiter, async (req
     return res.status(400).json({ error: 'No two-factor challenge in progress' })
   }
   const store = await readStore()
-  const account = store.accounts.find((item) => item.id === session.accountId)
+  const account = findAccountById(store, session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
     return res.status(401).json({ error: 'Not signed in' })
   }
   const config = resolveWebAuthnConfig({
     req,
-    companyName: store.appData?.company?.name,
+    companyName: tenantDisplayName(store, account.tenantId),
   })
   const result = await createAuthenticationOptions({ account, config })
   if (!result.ok) return res.status(400).json({ error: result.error })
@@ -762,14 +972,14 @@ app.post('/api/auth/webauthn/authenticate/verify', twoFactorLimiter, async (req,
     return res.status(400).json({ error: 'No two-factor challenge in progress' })
   }
   const store = await readStore()
-  const account = store.accounts.find((item) => item.id === session.accountId)
+  const account = findAccountById(store, session.accountId)
   if (!account || account.status !== 'Active') {
     clearSessionCookie(res)
     return res.status(401).json({ error: 'Not signed in' })
   }
   const config = resolveWebAuthnConfig({
     req,
-    companyName: store.appData?.company?.name,
+    companyName: tenantDisplayName(store, account.tenantId),
   })
   const result = await verifyAuthentication({
     account,
@@ -779,7 +989,7 @@ app.post('/api/auth/webauthn/authenticate/verify', twoFactorLimiter, async (req,
   if (!result.ok) return res.status(401).json({ error: result.error })
   await writeStore(store)
 
-  const token = signToken({ kind: 'account', accountId: account.id })
+  const token = signAccountSession(account)
   setSessionCookie(res, token)
   return res.json({ account: publicAccount(account) })
 })
@@ -792,13 +1002,13 @@ app.post('/api/auth/webauthn/login/options', twoFactorLimiter, async (req, res) 
     return res.status(400).json({ error: 'Email is required' })
   }
   const store = await readStore()
-  const account = store.accounts.find((item) => item.email === email)
+  const account = findAccountByEmail(store, email)
   if (!account || account.status !== 'Active' || !accountHasPasskey(account)) {
     return res.status(401).json({ error: 'Passkey sign-in is not available for that email' })
   }
   const config = resolveWebAuthnConfig({
     req,
-    companyName: store.appData?.company?.name,
+    companyName: tenantDisplayName(store, account.tenantId),
   })
   const result = await createAuthenticationOptions({ account, config })
   if (!result.ok) return res.status(400).json({ error: result.error })
@@ -813,13 +1023,13 @@ app.post('/api/auth/webauthn/login/verify', twoFactorLimiter, async (req, res) =
     return res.status(400).json({ error: 'Email is required' })
   }
   const store = await readStore()
-  const account = store.accounts.find((item) => item.email === email)
+  const account = findAccountByEmail(store, email)
   if (!account || account.status !== 'Active') {
     return res.status(401).json({ error: 'Passkey sign-in failed' })
   }
   const config = resolveWebAuthnConfig({
     req,
-    companyName: store.appData?.company?.name,
+    companyName: tenantDisplayName(store, account.tenantId),
   })
   const result = await verifyAuthentication({
     account,
@@ -829,7 +1039,7 @@ app.post('/api/auth/webauthn/login/verify', twoFactorLimiter, async (req, res) =
   if (!result.ok) return res.status(401).json({ error: result.error })
   await writeStore(store)
 
-  const token = signToken({ kind: 'account', accountId: account.id })
+  const token = signAccountSession(account)
   setSessionCookie(res, token)
   return res.json({ account: publicAccount(account) })
 })
@@ -854,7 +1064,7 @@ app.post('/api/auth/webauthn/credentials/remove', async (req, res) => {
   const remainingPasskeys = existing.filter((item) => item.id !== credentialId)
   const wouldHaveSecondFactor =
     Boolean(account.totpEnabled && account.totpSecret) || remainingPasskeys.length > 0
-  const policy = companyTwoFactorPolicy(store)
+  const policy = companyTwoFactorPolicy(store, account.tenantId)
   if (policyRequiresTwoFactor(policy, account.role) && !wouldHaveSecondFactor) {
     return res.status(400).json({
       error: 'Cannot remove the last second factor while two-factor is required for your role.',
@@ -877,10 +1087,34 @@ app.post('/api/auth/webauthn/credentials/remove', async (req, res) => {
   return res.json({ account: publicAccount(account) })
 })
 
+app.get('/api/recovery/tenants', async (req, res) => {
+  if (!requireRecovery(req, res)) return
+  const store = await readStore()
+  res.json({ tenants: listTenants(store).map(publicTenant) })
+})
+
+app.post('/api/recovery/tenants', async (req, res) => {
+  if (!requireRecovery(req, res)) return
+  const name = String(req.body?.name || '').trim() || 'Organisation'
+  const store = await readStore()
+  const tenant = createTenant(store, { name })
+  const appData = ensureTenantAppData(store, tenant.id)
+  appData.company = { ...emptyCompany(), ...appData.company, name }
+  await writeStore(store)
+  return res.status(201).json({ tenant: publicTenant(tenant) })
+})
+
 app.get('/api/recovery/accounts', async (req, res) => {
   if (!requireRecovery(req, res)) return
   const store = await readStore()
-  res.json({ accounts: store.accounts.map(publicAccount) })
+  const tenantId = Number(req.query?.tenantId)
+  if (!Number.isFinite(tenantId) || !getTenant(store, tenantId)) {
+    return res.status(400).json({ error: 'tenantId is required' })
+  }
+  res.json({
+    tenant: publicTenant(getTenant(store, tenantId)),
+    accounts: accountsForTenant(store, tenantId).map(publicAccount),
+  })
 })
 
 app.post('/api/recovery/accounts', async (req, res) => {
@@ -891,6 +1125,10 @@ app.post('/api/recovery/accounts', async (req, res) => {
   const displayName = String(req.body?.displayName || '').trim()
   const password = String(req.body?.password || '')
   const role = req.body?.role === 'employee' ? 'employee' : 'admin'
+  let tenantId = req.body?.tenantId == null || req.body?.tenantId === ''
+    ? null
+    : Number(req.body.tenantId)
+  const organisationName = String(req.body?.organisationName || req.body?.companyName || '').trim()
 
   if (!email || !displayName || !password) {
     return res.status(400).json({ error: 'Email, name, and password are required' })
@@ -903,18 +1141,40 @@ app.post('/api/recovery/accounts', async (req, res) => {
   }
 
   const store = await readStore()
-  if (store.accounts.some((item) => item.email === email)) {
+  if (findAccountByEmail(store, email)) {
     return res.status(409).json({ error: 'An account with that email already exists' })
   }
 
-  const isFirst = store.accounts.length === 0
+  let tenant = tenantId != null ? getTenant(store, tenantId) : null
+  if (!tenant) {
+    const tenants = listTenants(store)
+    if (tenants.length === 0 || organisationName) {
+      tenant = createTenant(store, { name: organisationName || 'Organisation' })
+      const appData = ensureTenantAppData(store, tenant.id)
+      appData.company = {
+        ...emptyCompany(),
+        ...appData.company,
+        name: organisationName || tenant.name,
+      }
+      tenantId = tenant.id
+    } else if (tenants.length === 1) {
+      tenant = tenants[0]
+      tenantId = tenant.id
+    } else {
+      return res.status(400).json({ error: 'tenantId is required when multiple organisations exist' })
+    }
+  }
+
+  const tenantAccounts = accountsForTenant(store, tenantId)
+  const isFirst = tenantAccounts.length === 0
   if (isFirst && role !== 'admin') {
-    return res.status(400).json({ error: 'The first account must be an admin' })
+    return res.status(400).json({ error: 'The first account in an organisation must be an admin' })
   }
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
   const account = {
     id: store.nextAccountId++,
+    tenantId,
     email,
     displayName,
     initials: initialsFromName(displayName),
@@ -924,17 +1184,21 @@ app.post('/api/recovery/accounts', async (req, res) => {
     jobTitle: req.body?.jobTitle || undefined,
     isPrimary: isFirst,
     passwordHash,
+    sessionVersion: 0,
   }
   store.accounts.push(account)
   await writeStore(store)
-  return res.status(201).json({ account: publicAccount(account) })
+  return res.status(201).json({
+    account: publicAccount(account),
+    tenant: publicTenant(getTenant(store, tenantId)),
+  })
 })
 
 app.patch('/api/recovery/accounts/:id', async (req, res) => {
   if (!requireRecovery(req, res)) return
   const id = Number(req.params.id)
   const store = await readStore()
-  const account = store.accounts.find((item) => item.id === id)
+  const account = findAccountById(store, id)
   if (!account) return res.status(404).json({ error: 'Account not found' })
 
   const changes = []
@@ -949,7 +1213,9 @@ app.patch('/api/recovery/accounts/:id', async (req, res) => {
     changes.push(`role=${account.role}`)
   }
   if (req.body?.isPrimary === true) {
-    for (const item of store.accounts) item.isPrimary = item.id === account.id
+    for (const item of accountsForTenant(store, account.tenantId)) {
+      item.isPrimary = item.id === account.id
+    }
     account.role = 'admin'
     account.status = 'Active'
     changes.push('made-primary')
@@ -959,6 +1225,7 @@ app.patch('/api/recovery/accounts/:id', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 10 characters' })
     }
     account.passwordHash = await bcrypt.hash(req.body.password, BCRYPT_ROUNDS)
+    bumpAccountSessionVersion(account)
     changes.push('password-reset')
   }
   if (req.body?.clearTwoFactor === true) {
@@ -986,6 +1253,7 @@ app.patch('/api/recovery/accounts/:id', async (req, res) => {
       entityType: 'account',
       entityId: account.id,
     }),
+    account.tenantId,
   )
   await writeStore(store)
   return res.json({ account: publicAccount(account) })
@@ -999,12 +1267,13 @@ app.delete('/api/recovery/accounts/:id', async (req, res) => {
   if (index < 0) return res.status(404).json({ error: 'Account not found' })
 
   const [removed] = store.accounts.splice(index, 1)
-  if (removed.isPrimary && store.accounts.length > 0) {
+  const peers = accountsForTenant(store, removed.tenantId)
+  if (removed.isPrimary && peers.length > 0) {
     const nextPrimary =
-      store.accounts.find((item) => item.role === 'admin' && item.status === 'Active') ||
-      store.accounts.find((item) => item.role === 'admin') ||
-      store.accounts[0]
-    for (const item of store.accounts) item.isPrimary = item.id === nextPrimary.id
+      peers.find((item) => item.role === 'admin' && item.status === 'Active') ||
+      peers.find((item) => item.role === 'admin') ||
+      peers[0]
+    for (const item of peers) item.isPrimary = item.id === nextPrimary.id
     nextPrimary.role = 'admin'
     nextPrimary.status = 'Active'
   }
@@ -1018,6 +1287,7 @@ app.delete('/api/recovery/accounts/:id', async (req, res) => {
       entityType: 'account',
       entityId: removed.id,
     }),
+    removed.tenantId,
   )
   await writeStore(store)
   return res.json({ ok: true, deletedId: removed.id })
@@ -1026,65 +1296,27 @@ app.delete('/api/recovery/accounts/:id', async (req, res) => {
 app.get('/api/app-data', async (req, res) => {
   const ctx = await requireAccount(req, res)
   if (!ctx) return
-  const { store } = ctx
-  res.json({
-    ...store.appData,
-    accounts: store.accounts.map(publicAccount),
-  })
+  const { store, account } = ctx
+  res.json(projectAppDataForViewer(store, account, publicAccount))
 })
 
 app.put('/api/app-data', async (req, res) => {
   const ctx = await requireAccount(req, res)
   if (!ctx) return
   const { account } = ctx
-  if (account.role !== 'admin' && !req.body?._allowEmployeeSave) {
-    // Employees can still persist leave/expenses — allow all authenticated users to save app data
-  }
 
-  const incoming = req.body || {}
-  const {
-    accounts: _ignoredAccounts,
-    _auditAppend: rawAppend,
-    ...appData
-  } = incoming
-
-  if (!appData.company) {
-    return res.status(400).json({ error: 'Invalid app data' })
-  }
-
-  const stampedAppend = Array.isArray(rawAppend)
-    ? rawAppend.map((item) =>
-        createAuditEvent({
-          ...item,
-          actorAccountId: account.id,
-          actorName: account.displayName || account.email,
-          id: typeof item?.id === 'string' ? item.id : undefined,
-          at: typeof item?.at === 'string' ? item.at : undefined,
-        }),
-      )
-    : []
-
-  const mergedAudit = await updateStore((store) => {
-    // Re-read under the store gate: merge server truth + client snapshot + explicit appends.
-    // Client snapshots may lag concurrent saves; merge-by-id never deletes server events.
-    const nextAudit = mergeAuditEvents(
-      mergeAuditEvents(store.appData?.auditEvents, appData.auditEvents),
-      stampedAppend,
-    )
-
-    store.appData = {
-      ...emptyAppData(),
-      ...appData,
-      company: {
-        ...emptyCompany(),
-        ...appData.company,
-      },
-      auditEvents: nextAudit,
+  const result = await updateStore((store) => {
+    const live = findAccountById(store, account.id)
+    if (!live || live.status !== 'Active') {
+      return { ok: false, status: 401, error: 'Not signed in' }
     }
-    return nextAudit
+    return applyAppDataWrite(store, live, req.body || {})
   })
 
-  res.json({ ok: true, auditEvents: mergedAudit })
+  if (!result?.ok) {
+    return res.status(result?.status || 400).json({ error: result?.error || 'Save failed' })
+  }
+  res.json({ ok: true, auditEvents: result.auditEvents })
 })
 
 app.post('/api/accounts', async (req, res) => {
@@ -1100,28 +1332,45 @@ app.post('/api/accounts', async (req, res) => {
     .toLowerCase()
   const displayName = String(req.body?.displayName || '').trim()
   const password = String(req.body?.password || '')
+  const invite = req.body?.invite !== false && !password
   const role = req.body?.role === 'admin' ? 'admin' : 'employee'
   const employeeId =
     req.body?.employeeId === null || req.body?.employeeId === undefined || req.body?.employeeId === ''
       ? null
       : Number(req.body.employeeId)
 
-  if (!email || !displayName || !password) {
-    return res.status(400).json({ error: 'Email, name, and password are required' })
+  if (!email || !displayName) {
+    return res.status(400).json({ error: 'Email and name are required' })
   }
-  if (password.length < 10) {
-    return res.status(400).json({ error: 'Password must be at least 10 characters' })
+  if (!invite) {
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required when not sending an invite' })
+    }
+    if (password.length < 10) {
+      return res.status(400).json({ error: 'Password must be at least 10 characters' })
+    }
   }
   if (email === masterConfig.login) {
     return res.status(400).json({ error: 'That login is reserved for master recovery' })
   }
-  if (store.accounts.some((item) => item.email === email)) {
+  if (findAccountByEmail(store, email)) {
     return res.status(409).json({ error: 'An account with that email already exists' })
   }
 
-  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS)
+  if (invite) {
+    const smtp = mailStatusPublic()
+    if (!smtp.configured) {
+      return res.status(503).json({
+        error: 'Email is not configured on this server, so invites cannot be sent.',
+      })
+    }
+  }
+
+  const placeholderHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), BCRYPT_ROUNDS)
+  const passwordHash = invite ? placeholderHash : await bcrypt.hash(password, BCRYPT_ROUNDS)
   const created = {
     id: store.nextAccountId++,
+    tenantId: actor.tenantId,
     email,
     displayName,
     initials: initialsFromName(displayName),
@@ -1131,21 +1380,118 @@ app.post('/api/accounts', async (req, res) => {
     jobTitle: req.body?.jobTitle || undefined,
     isPrimary: false,
     passwordHash,
+    mustSetPassword: invite,
+    sessionVersion: 0,
   }
+
+  let inviteToken = null
+  if (invite) {
+    inviteToken = issuePasswordSetup(created, 'invite')
+  }
+
   store.accounts.push(created)
+
+  if (invite && inviteToken) {
+    const orgName = tenantDisplayName(store, created.tenantId)
+    const setupLink = passwordSetupUrl(req, inviteToken)
+    const mailed = await sendMail({
+      to: created.email,
+      subject: `${orgName} — you’re invited to Finch`,
+      text: [
+        `${actor.displayName || 'Someone'} invited you to ${orgName} on Finch.`,
+        '',
+        `Set your password here:`,
+        setupLink,
+        '',
+        'This link expires in 7 days.',
+        '',
+        `Once you’ve set a password, sign in with ${created.email}.`,
+      ].join('\n'),
+    })
+    if (!mailed.ok) {
+      // Roll back the unfinished invite so we don’t leave a locked account.
+      store.accounts = store.accounts.filter((item) => item.id !== created.id)
+      return res.status(503).json({
+        error: 'Could not send the invite email. Try again later.',
+      })
+    }
+  }
+
   appendAuditEvent(
     store,
     createAuditEvent({
       actorAccountId: actor.id,
       actorName: actor.displayName || actor.email,
-      action: 'account.created',
-      summary: `${actor.displayName || actor.email} created account ${displayName} (${role})`,
+      action: invite ? 'account.invited' : 'account.created',
+      summary: invite
+        ? `${actor.displayName || actor.email} invited ${displayName} (${role})`
+        : `${actor.displayName || actor.email} created account ${displayName} (${role})`,
       entityType: 'account',
       entityId: created.id,
     }),
   )
   await writeStore(store)
-  res.status(201).json({ account: publicAccount(created) })
+  res.status(201).json({
+    account: publicAccount(created),
+    invited: invite,
+  })
+})
+
+app.post('/api/accounts/:id/resend-invite', async (req, res) => {
+  const ctx = await requireAccount(req, res)
+  if (!ctx) return
+  const { account: actor, store } = ctx
+  if (actor.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can resend invites' })
+  }
+  const id = Number(req.params.id)
+  const target = findAccountById(store, id)
+  if (!target || target.tenantId !== actor.tenantId) {
+    return res.status(404).json({ error: 'Account not found' })
+  }
+  if (!target.mustSetPassword && !target.passwordSetup) {
+    return res.status(400).json({ error: 'This account already has a password set' })
+  }
+
+  const smtp = mailStatusPublic()
+  if (!smtp.configured) {
+    return res.status(503).json({
+      error: 'Email is not configured on this server, so invites cannot be sent.',
+    })
+  }
+
+  const inviteToken = issuePasswordSetup(target, 'invite')
+  target.mustSetPassword = true
+  const orgName = tenantDisplayName(store, target.tenantId)
+  const setupLink = passwordSetupUrl(req, inviteToken)
+  const mailed = await sendMail({
+    to: target.email,
+    subject: `${orgName} — you’re invited to Finch`,
+    text: [
+      `${actor.displayName || 'Someone'} sent you a new Finch invite for ${orgName}.`,
+      '',
+      `Set your password here:`,
+      setupLink,
+      '',
+      'This link expires in 7 days.',
+    ].join('\n'),
+  })
+  if (!mailed.ok) {
+    return res.status(503).json({ error: 'Could not send the invite email. Try again later.' })
+  }
+  appendAuditEvent(
+    store,
+    createAuditEvent({
+      actorAccountId: actor.id,
+      actorName: actor.displayName || actor.email,
+      action: 'account.invite_resent',
+      summary: `${actor.displayName || actor.email} resent invite to ${target.displayName || target.email}`,
+      entityType: 'account',
+      entityId: target.id,
+    }),
+  )
+  await writeStore(store)
+  return res.json({ ok: true, account: publicAccount(target) })
 })
 
 app.patch('/api/accounts/:id', async (req, res) => {
@@ -1157,11 +1503,15 @@ app.patch('/api/accounts/:id', async (req, res) => {
   }
 
   const id = Number(req.params.id)
-  const target = store.accounts.find((item) => item.id === id)
-  if (!target) return res.status(404).json({ error: 'Account not found' })
+  const target = findAccountById(store, id)
+  if (!target || target.tenantId !== actor.tenantId) {
+    return res.status(404).json({ error: 'Account not found' })
+  }
 
   const activeAdmins = () =>
-    store.accounts.filter((item) => item.role === 'admin' && item.status === 'Active')
+    accountsForTenant(store, actor.tenantId).filter(
+      (item) => item.role === 'admin' && item.status === 'Active',
+    )
 
   if (req.body?.role === 'employee' && target.role === 'admin') {
     if (target.isPrimary) {
@@ -1201,7 +1551,9 @@ app.patch('/api/accounts/:id', async (req, res) => {
     if (!ok) {
       return res.status(401).json({ error: 'Password confirmation failed' })
     }
-    for (const item of store.accounts) item.isPrimary = item.id === target.id
+    for (const item of accountsForTenant(store, actor.tenantId)) {
+      item.isPrimary = item.id === target.id
+    }
     target.role = 'admin'
     target.status = 'Active'
   }
@@ -1232,7 +1584,10 @@ app.patch('/api/accounts/:id', async (req, res) => {
     }),
   )
   await writeStore(store)
-  res.json({ account: publicAccount(target), accounts: store.accounts.map(publicAccount) })
+  res.json({
+    account: publicAccount(target),
+    accounts: accountsForTenant(store, actor.tenantId).map(publicAccount),
+  })
 })
 
 app.post('/api/auth/verify-password', async (req, res) => {
@@ -1265,6 +1620,7 @@ app.post('/api/auth/change-password', async (req, res) => {
   if (!ok) return res.status(401).json({ error: 'Current password is incorrect' })
 
   account.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS)
+  bumpAccountSessionVersion(account)
   appendAuditEvent(
     store,
     createAuditEvent({
@@ -1277,6 +1633,9 @@ app.post('/api/auth/change-password', async (req, res) => {
     }),
   )
   await writeStore(store)
+  // Issue a fresh session for the caller; other sessions are revoked via sessionVersion.
+  const token = signAccountSession(account)
+  setSessionCookie(res, token)
   return res.json({ ok: true })
 })
 
@@ -1346,7 +1705,7 @@ app.post('/api/notifications/payroll-report', async (req, res) => {
     return res.status(403).json({ error: 'Only admins can email payroll reports' })
   }
 
-  const company = store.appData?.company || {}
+  const company = ensureTenantAppData(store, account.tenantId).company || {}
   const to = String(req.body?.to || company.payrollEmail || '')
     .trim()
     .toLowerCase()
@@ -1406,12 +1765,7 @@ if (fs.existsSync(distDir)) {
 
 async function boot() {
   await initStore()
-  const store = await readStore()
-  const hasDemo = store.accounts.some((item) => String(item.email || '').endsWith('@northstar.demo'))
-  if (hasDemo) {
-    await writeStore(defaultStore())
-    console.log('Wiped legacy demo accounts and app data')
-  }
+  // Intentionally no automatic store wipe. Legacy demo cleanup must be a manual ops action.
 
   const server = app.listen(PORT, () => {
     console.log(`Finch API listening on http://localhost:${PORT} (${getStoreBackend()})`)

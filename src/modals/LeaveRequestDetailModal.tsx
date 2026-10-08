@@ -5,13 +5,14 @@ import {
   appToday,
   companyEntitlementSettings,
   type CompanySettings,
+  type DayHalf,
   type Employee,
   type LeaveRequest,
   type PortalMessage,
   type RequestStatus,
 } from '../domain'
+import { countLeaveWorkingDays, formatHalfDayOption } from '../leaveDays'
 import {
-  buildLeaveRequestFields,
   canCancelApprovedLeave,
   canDirectlyAmend,
   canProposeAmendment,
@@ -29,12 +30,17 @@ import { type LeaveYearPeriod } from '../leaveYear'
 import { isAnnualLeaveRequest } from '../leaveTypes'
 import { useModalA11y } from '../hooks/useModalA11y'
 import { messagesForRequest } from '../portalMessages'
-import {
-  countWorkingDaysInRange,
-  type AbsenceRecord,
-  type BankHoliday,
-} from '../payroll'
+import { type AbsenceRecord, type BankHoliday } from '../payroll'
 import { toIsoDate } from '../calendarUtils'
+
+type AmendPayload = {
+  start: string
+  end: string
+  days: number
+  note: string
+  startHalf: DayHalf
+  endHalf: DayHalf
+}
 
 type LeaveRequestDetailModalProps = {
   request: LeaveRequest
@@ -49,8 +55,8 @@ type LeaveRequestDetailModalProps = {
   adjustments?: LeaveAdjustment[]
   onClose: () => void
   onSendMessage: (body: string) => void
-  onDirectAmend: (payload: { start: string; end: string; days: number; note: string }) => void
-  onProposeAmendment: (payload: { start: string; end: string; days: number; note: string }) => void
+  onDirectAmend: (payload: AmendPayload) => void
+  onProposeAmendment: (payload: AmendPayload) => void
   onUpdateRequest: (status: RequestStatus) => void
   onResolveAmendment: (approved: boolean) => void
   onCancelApproved?: () => void
@@ -86,15 +92,26 @@ export function LeaveRequestDetailModal({
   }
   const [startDate, setStartDate] = useState(defaults.start)
   const [endDate, setEndDate] = useState(defaults.end)
+  const [startHalf, setStartHalf] = useState<DayHalf>(request.startHalf ?? 'full')
+  const [endHalf, setEndHalf] = useState<DayHalf>(request.endHalf ?? 'full')
   const [note, setNote] = useState(request.note)
   const dialogRef = useModalA11y(onClose)
+  const singleDay = startDate === endDate
+  const effectiveEndHalf = singleDay ? startHalf : endHalf
 
   const entitlementSettings = companyEntitlementSettings(company)
   const threadMessages = messagesForRequest(portalMessages, request.id)
   const dates = requestDisplayDates(request)
   const dayCount = useMemo(
-    () => countWorkingDaysInRange(startDate, endDate, employee.workingDays),
-    [startDate, endDate, employee.workingDays],
+    () =>
+      countLeaveWorkingDays(
+        startDate,
+        endDate,
+        employee.workingDays,
+        startHalf,
+        effectiveEndHalf,
+      ),
+    [startDate, endDate, employee.workingDays, startHalf, effectiveEndHalf],
   )
   const balanceAfterAmend = useMemo(() => {
     if (!isAnnualLeaveRequest(request) || dayCount <= 0) return null
@@ -103,13 +120,22 @@ export function LeaveRequestDetailModal({
       endDate,
       leaveYear,
       employee.workingDays,
+      startHalf,
+      effectiveEndHalf,
     )
     const additionalDays =
       request.status === 'Pending'
         ? newYearDays
         : newYearDays -
           (request.start && request.end
-            ? leaveDaysInLeaveYear(request.start, request.end, leaveYear, employee.workingDays)
+            ? leaveDaysInLeaveYear(
+                request.start,
+                request.end,
+                leaveYear,
+                employee.workingDays,
+                request.startHalf,
+                request.endHalf,
+              )
             : 0)
     return remainingAnnualLeave(
       employee,
@@ -126,6 +152,8 @@ export function LeaveRequestDetailModal({
     dayCount,
     startDate,
     endDate,
+    startHalf,
+    effectiveEndHalf,
     request,
     employee,
     entitlementSettings,
@@ -157,7 +185,14 @@ export function LeaveRequestDetailModal({
       if (!proceed) return
     }
 
-    const payload = { start: startDate, end: endDate, days: dayCount, note }
+    const payload = {
+      start: startDate,
+      end: endDate,
+      days: dayCount,
+      note,
+      startHalf,
+      endHalf: effectiveEndHalf,
+    }
     if (canDirectlyAmend(request)) {
       onDirectAmend(payload)
     } else if (canProposeAmendment(request)) {
@@ -271,7 +306,11 @@ export function LeaveRequestDetailModal({
                   <input
                     type="date"
                     value={startDate}
-                    onChange={(event) => setStartDate(event.target.value)}
+                    onChange={(event) => {
+                      const next = event.target.value
+                      setStartDate(next)
+                      if (endDate < next) setEndDate(next)
+                    }}
                   />
                 </label>
                 <label>
@@ -282,6 +321,32 @@ export function LeaveRequestDetailModal({
                     onChange={(event) => setEndDate(event.target.value)}
                   />
                 </label>
+              </div>
+              <div className="form-row">
+                <label>
+                  {singleDay ? 'Day portion' : 'First day portion'}
+                  <select
+                    value={startHalf}
+                    onChange={(event) => setStartHalf(event.target.value as DayHalf)}
+                  >
+                    <option value="full">{formatHalfDayOption('full')}</option>
+                    <option value="AM">{formatHalfDayOption('AM')}</option>
+                    <option value="PM">{formatHalfDayOption('PM')}</option>
+                  </select>
+                </label>
+                {!singleDay && (
+                  <label>
+                    Last day portion
+                    <select
+                      value={endHalf}
+                      onChange={(event) => setEndHalf(event.target.value as DayHalf)}
+                    >
+                      <option value="full">{formatHalfDayOption('full')}</option>
+                      <option value="AM">{formatHalfDayOption('AM')}</option>
+                      <option value="PM">{formatHalfDayOption('PM')}</option>
+                    </select>
+                  </label>
+                )}
               </div>
               <div className="days-preview">
                 <CalendarDays size={17} />
@@ -384,5 +449,3 @@ export function LeaveRequestDetailModal({
     </div>
   )
 }
-
-export { buildLeaveRequestFields }

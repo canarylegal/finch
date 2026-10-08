@@ -37,6 +37,7 @@ import {
   createAccountRequest,
   emailPayrollReportRequest,
   fetchAppData,
+  fetchBootstrap,
   fetchMe,
   logoutRequest,
   saveAppData,
@@ -68,6 +69,9 @@ import {
 import { createPortalMessage } from './portalMessages'
 import { type Account } from './auth'
 import { LoginPage } from './pages/LoginPage'
+import { LandingPage } from './pages/LandingPage'
+import { SetPasswordPage } from './pages/SetPasswordPage'
+import { HelpPage } from './pages/HelpPage'
 import { RecoveryConsole } from './pages/RecoveryConsole'
 import { OrgSetupWizard } from './pages/OrgSetupWizard'
 import {
@@ -101,7 +105,6 @@ import {
   buildPayrollReport,
   countWorkingDaysInRange,
   dueAutoPayrollPeriod,
-  formatDisplayDate,
   formatPayPeriodLabel,
   payrollReportToCsv,
   payrollReportToEmailBody,
@@ -148,13 +151,31 @@ import {
 import { findLeaveConflicts, overlapWarningMessage } from './leaveOverlap'
 import './App.css'
 
-type BootState = 'loading' | 'login' | 'recovery' | 'ready'
+type BootState = 'loading' | 'landing' | 'login' | 'set-password' | 'recovery' | 'ready'
+
+function readSetPasswordToken() {
+  if (typeof window === 'undefined') return ''
+  return new URLSearchParams(window.location.search).get('setPassword')?.trim() || ''
+}
+
+function clearSetPasswordTokenFromUrl() {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  if (!url.searchParams.has('setPassword')) return
+  url.searchParams.delete('setPassword')
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+}
 
 function App() {
   const empty = emptyRuntimeData()
   const [bootState, setBootState] = useState<BootState>('loading')
   const [accounts, setAccounts] = useState<Account[]>(empty.accounts)
   const [sessionAccount, setSessionAccount] = useState<Account | null>(null)
+  const [bootstrapInfo, setBootstrapInfo] = useState<{
+    companyName: string
+  }>({ companyName: '' })
+  const [passwordSetupToken, setPasswordSetupToken] = useState('')
+  const [loginPrefillEmail, setLoginPrefillEmail] = useState('')
   const [activeNav, setActiveNav] = useState('Overview')
   const [requests, setRequests] = useState(empty.requests)
   const [portalMessages, setPortalMessages] = useState(empty.portalMessages)
@@ -360,9 +381,22 @@ function App() {
     localStorage.removeItem('finch-app-data')
     localStorage.removeItem('finch-session')
     void (async () => {
+      const setupToken = readSetPasswordToken()
+      const bootstrap = await fetchBootstrap()
+      if (bootstrap.ok) {
+        setBootstrapInfo({
+          companyName: bootstrap.data.companyName || '',
+        })
+      }
+
       const me = await fetchMe()
       if (!me.ok) {
-        setBootState('login')
+        if (setupToken) {
+          setPasswordSetupToken(setupToken)
+          setBootState('set-password')
+          return
+        }
+        setBootState('landing')
         return
       }
       if (
@@ -378,6 +412,7 @@ function App() {
         setBootState('recovery')
         return
       }
+      clearSetPasswordTokenFromUrl()
       const loaded = await loadAppDataForSession(me.data.account)
       if (!loaded) return
     })()
@@ -531,7 +566,13 @@ function App() {
   const signOut = async () => {
     await logoutRequest()
     setSessionAccount(null)
-    setBootState('login')
+    const bootstrap = await fetchBootstrap()
+    if (bootstrap.ok) {
+      setBootstrapInfo({
+        companyName: bootstrap.data.companyName || '',
+      })
+    }
+    setBootState('landing')
     setActiveNav('Overview')
     setAdminWorkspaceView('admin')
     setMobileNavOpen(false)
@@ -677,12 +718,29 @@ function App() {
 
   const directAmendLeaveRequest = (
     id: number,
-    payload: { start: string; end: string; days: number; note: string },
+    payload: {
+      start: string
+      end: string
+      days: number
+      note: string
+      startHalf?: import('./domain').DayHalf
+      endHalf?: import('./domain').DayHalf
+    },
   ) => {
     setRequests((current) =>
       current.map((item) =>
         item.id === id
-          ? { ...item, ...buildLeaveRequestFields(payload.start, payload.end, payload.days, payload.note) }
+          ? {
+              ...item,
+              ...buildLeaveRequestFields(
+                payload.start,
+                payload.end,
+                payload.days,
+                payload.note,
+                payload.startHalf ?? 'full',
+                payload.endHalf ?? 'full',
+              ),
+            }
           : item,
       ),
     )
@@ -691,12 +749,29 @@ function App() {
 
   const proposeLeaveAmendment = (
     id: number,
-    payload: { start: string; end: string; days: number; note: string },
+    payload: {
+      start: string
+      end: string
+      days: number
+      note: string
+      startHalf?: import('./domain').DayHalf
+      endHalf?: import('./domain').DayHalf
+    },
   ) => {
     setRequests((current) =>
       current.map((item) =>
         item.id === id
-          ? { ...item, pendingAmendment: buildLeaveAmendment(payload.start, payload.end, payload.days, payload.note) }
+          ? {
+              ...item,
+              pendingAmendment: buildLeaveAmendment(
+                payload.start,
+                payload.end,
+                payload.days,
+                payload.note,
+                payload.startHalf ?? 'full',
+                payload.endHalf ?? 'full',
+              ),
+            }
           : item,
       ),
     )
@@ -723,18 +798,31 @@ function App() {
     }
 
     const amendment = request.pendingAmendment
-    const amount = countWorkingDaysInRange(amendment.start, amendment.end, employee.workingDays)
+    const amendmentStartHalf = amendment.startHalf ?? 'full'
+    const amendmentEndHalf = amendment.endHalf ?? 'full'
+    const amount =
+      parseDurationDays(amendment.duration) ||
+      countWorkingDaysInRange(amendment.start, amendment.end, employee.workingDays)
 
     if (isAnnualLeaveRequest(request)) {
       const currentDays =
         request.start && request.end
-          ? leaveDaysInLeaveYear(request.start, request.end, leaveYear, employee.workingDays)
+          ? leaveDaysInLeaveYear(
+              request.start,
+              request.end,
+              leaveYear,
+              employee.workingDays,
+              request.startHalf,
+              request.endHalf,
+            )
           : parseDurationDays(request.duration)
       const newDays = leaveDaysInLeaveYear(
         amendment.start,
         amendment.end,
         leaveYear,
         employee.workingDays,
+        amendmentStartHalf,
+        amendmentEndHalf,
       )
       const remainingAfter = remainingAnnualLeave(
         employee,
@@ -815,7 +903,14 @@ function App() {
         item.id === id
           ? {
               ...item,
-              ...buildLeaveRequestFields(amendment.start, amendment.end, amount, amendment.note),
+              ...buildLeaveRequestFields(
+                amendment.start,
+                amendment.end,
+                amount,
+                amendment.note,
+                amendmentStartHalf,
+                amendmentEndHalf,
+              ),
               absenceId: nextAbsenceId,
               pendingAmendment: undefined,
             }
@@ -843,7 +938,14 @@ function App() {
     if (status === 'Approved' && request && employee && isAnnualLeaveRequest(request)) {
       const days =
         request.start && request.end
-          ? leaveDaysInLeaveYear(request.start, request.end, leaveYear, employee.workingDays)
+          ? leaveDaysInLeaveYear(
+              request.start,
+              request.end,
+              leaveYear,
+              employee.workingDays,
+              request.startHalf,
+              request.endHalf,
+            )
           : parseDurationDays(request.duration)
       const remainingAfter = remainingAnnualLeave(
         employee,
@@ -1063,6 +1165,8 @@ function App() {
     days: number
     note: string
     leaveType: string
+    startHalf?: import('./domain').DayHalf
+    endHalf?: import('./domain').DayHalf
   }) => {
     if (!company.leaveYearConfigured) {
       notify(LEAVE_NOT_CONFIGURED_EMPLOYEE_MESSAGE)
@@ -1070,6 +1174,8 @@ function App() {
     }
     const employee = currentEmployee
     if (!employee) return
+    const startHalf = payload.startHalf ?? 'full'
+    const endHalf = payload.endHalf ?? 'full'
 
     if (payload.leaveType === 'Annual leave') {
       const yearDays = leaveDaysInLeaveYear(
@@ -1077,6 +1183,8 @@ function App() {
         payload.end,
         leaveYear,
         employee.workingDays,
+        startHalf,
+        endHalf,
       )
       const remainingAfter = remainingAnnualLeave(
         employee,
@@ -1109,10 +1217,14 @@ function App() {
       if (!proceed) return
     }
 
-    const startLabel = formatDisplayDate(payload.start)
-    const endLabel = formatDisplayDate(payload.end)
-    const dates =
-      payload.start === payload.end ? startLabel : `${startLabel} – ${endLabel}`
+    const fields = buildLeaveRequestFields(
+      payload.start,
+      payload.end,
+      payload.days,
+      payload.note,
+      startHalf,
+      endHalf,
+    )
 
     setRequests((current) => [
       ...current,
@@ -1122,13 +1234,9 @@ function App() {
         name: employee.name,
         initials: employee.initials,
         color: employee.color,
-        dates,
-        duration: `${payload.days} ${payload.days === 1 ? 'day' : 'days'}`,
-        note: payload.note,
+        ...fields,
         status: 'Pending',
         leaveType: leaveRequestTypeFromLabel(payload.leaveType),
-        start: payload.start,
-        end: payload.end,
       },
     ])
     setIsLeaveModalOpen(false)
@@ -1138,7 +1246,7 @@ function App() {
         employeeId: employee.id,
         details: {
           employeeName: employee.name,
-          dates,
+          dates: fields.dates,
         },
       }).then((message) => notify(message))
     }
@@ -1335,7 +1443,10 @@ function App() {
     notify('Policy deleted')
   }
 
-  const addEmployee = (payload: Omit<Employee, 'id' | 'initials' | 'color'>) => {
+  const addEmployee = async (
+    payload: Omit<Employee, 'id' | 'initials' | 'color'>,
+    options: { email: string; sendInvite: boolean },
+  ) => {
     const nextId = Math.max(0, ...employees.map((item) => item.id)) + 1
     const employee: Employee = {
       ...payload,
@@ -1343,6 +1454,31 @@ function App() {
       initials: companyInitials(payload.name) || 'EE',
       color: AVATAR_COLORS[(nextId - 1) % AVATAR_COLORS.length],
     }
+
+    if (options.sendInvite) {
+      const result = await createAccountRequest({
+        email: options.email,
+        displayName: payload.name,
+        role: 'employee',
+        employeeId: nextId,
+        invite: true,
+        jobTitle: payload.role,
+      })
+      if (!result.ok) {
+        notify(result.error)
+        return
+      }
+      setAccounts((current) => [...current, result.data.account])
+      setEmployees((current) => [...current, employee])
+      setDocumentFolders((current) => [
+        ...current,
+        ...createDefaultFoldersForEmployee(nextId, current),
+      ])
+      setIsAddEmployeeOpen(false)
+      notify(`${payload.name} added — invite emailed to ${options.email}`)
+      return
+    }
+
     setEmployees((current) => [...current, employee])
     setDocumentFolders((current) => [
       ...current,
@@ -1357,12 +1493,19 @@ function App() {
     start: string
     end: string
     leaveType: string
+    startHalf?: import('./domain').DayHalf
+    endHalf?: import('./domain').DayHalf
+    days?: number
   }) => {
     const employee = employees.find((item) => item.id === payload.employeeId)
     if (!employee) return
 
     const leaveType = leaveRequestTypeFromLabel(payload.leaveType)
-    const days = countWorkingDaysInRange(payload.start, payload.end, employee.workingDays)
+    const startHalf = payload.startHalf ?? 'full'
+    const endHalf = payload.endHalf ?? 'full'
+    const days =
+      payload.days ??
+      countWorkingDaysInRange(payload.start, payload.end, employee.workingDays)
 
     if (leaveType === 'annual') {
       const yearDays = leaveDaysInLeaveYear(
@@ -1370,6 +1513,8 @@ function App() {
         payload.end,
         leaveYear,
         employee.workingDays,
+        startHalf,
+        endHalf,
       )
       const remainingAfter = remainingAnnualLeave(
         employee,
@@ -1409,6 +1554,8 @@ function App() {
       payload.end,
       days,
       payload.leaveType === 'Annual leave' ? 'Admin-added leave' : payload.leaveType,
+      startHalf,
+      endHalf,
     )
 
     setAbsences((current) => [
@@ -1547,13 +1694,51 @@ function App() {
   }
 
   if (bootState === 'recovery') {
-    return <RecoveryConsole onSignedOut={() => setBootState('login')} />
+    return <RecoveryConsole onSignedOut={() => setBootState('landing')} />
+  }
+
+  if (bootState === 'set-password') {
+    return (
+      <>
+        <SetPasswordPage
+          token={passwordSetupToken}
+          onDone={(email) => {
+            clearSetPasswordTokenFromUrl()
+            setPasswordSetupToken('')
+            setLoginPrefillEmail(email)
+            setBootState('login')
+            if (email) notify('Password saved — sign in to continue')
+          }}
+        />
+        {toast && <div className="toast">{toast}</div>}
+      </>
+    )
+  }
+
+  if (bootState === 'landing') {
+    return (
+      <>
+        <LandingPage
+          companyName={bootstrapInfo.companyName}
+          onSignIn={() => setBootState('login')}
+          onSignedIn={(account) => {
+            void (async () => {
+              const loaded = await loadAppDataForSession(account)
+              if (loaded) notify(`Welcome, ${account.displayName}`)
+            })()
+          }}
+        />
+        {toast && <div className="toast">{toast}</div>}
+      </>
+    )
   }
 
   if (bootState === 'login' || !sessionAccount) {
     return (
       <>
         <LoginPage
+          initialEmail={loginPrefillEmail}
+          onBackToLanding={() => setBootState('landing')}
           onSignedIn={(account) => {
             void (async () => {
               const loaded = await loadAppDataForSession(account)
@@ -1662,10 +1847,7 @@ function App() {
           <button
             type="button"
             className="nav-item"
-            onClick={() => {
-              handleNavigation('Policies')
-              notify('Opened policies — help centre coming later')
-            }}
+            onClick={() => handleNavigation('Help')}
           >
             <Bell size={17} />
             <span>Help centre</span>
@@ -1936,6 +2118,9 @@ function App() {
             onDeletePolicy={deletePolicy}
           />
         )}
+        {activeNav === 'Help' && (
+          <HelpPage onOpenPolicies={() => handleNavigation('Policies')} />
+        )}
         {activeNav === 'Documents' && !isAdmin && (
           <Documents
             employee={currentEmployee}
@@ -2052,18 +2237,15 @@ function App() {
             }}
             onAddAccount={async (payload) => {
               const email = payload.email.trim().toLowerCase()
-              if (!email || !payload.displayName.trim() || !payload.password) {
-                return 'Email, name, and password are required'
-              }
-              if (payload.password.length < 10) {
-                return 'Password must be at least 10 characters'
+              if (!email || !payload.displayName.trim()) {
+                return 'Email and name are required'
               }
               const result = await createAccountRequest({
                 email,
                 displayName: payload.displayName.trim(),
                 role: payload.role,
                 employeeId: null,
-                password: payload.password,
+                invite: true,
                 jobTitle: payload.jobTitle,
               })
               if (!result.ok) return result.error
@@ -2093,7 +2275,7 @@ function App() {
               }
               setEmployees(ensured.employees)
               setDocumentFolders(ensured.documentFolders)
-              notify(`Account created for ${result.data.account.displayName}`)
+              notify(`Invite sent to ${result.data.account.displayName}`)
               return null
             }}
           />

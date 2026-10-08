@@ -118,9 +118,13 @@ Set `SMTP_HOST` and `SMTP_FROM` (plus auth if required). Notification preference
 
 ## Recovery bootstrap
 
+Finch is multi-tenant: one deployment hosts many organisations. Emails are unique across the whole service.
+
 1. Sign in with `MASTER_ADMIN_LOGIN` / `MASTER_ADMIN_PASSWORD`.
-2. Create the first admin account.
+2. Create an organisation (or pick an existing one), then add its primary admin.
 3. Complete the organisation wizard as that admin.
+
+Self-serve signup on the landing page also creates a new organisation.
 
 ## Post-deploy smoke
 

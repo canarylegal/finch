@@ -34,21 +34,34 @@ export type PublicAccount = {
   initials: string
   role: 'admin' | 'employee'
   employeeId: number | null
+  tenantId?: number | null
   status: 'Active' | 'Inactive'
   jobTitle?: string
   isPrimary?: boolean
+  mustSetPassword?: boolean
   totpEnabled?: boolean
   recoveryCodesRemaining?: number
   passkeyCount?: number
   passkeys?: { id: string; name: string; createdAt: string | null; backedUp: boolean }[]
 }
 
+export type PublicTenant = {
+  id: number
+  name: string
+  slug: string
+  status: string
+  createdAt: string | null
+}
+
 export async function fetchBootstrap() {
   return api<{
+    multiTenant: boolean
+    canCreateOrganisation: boolean
+    organisationCount: number
     hasAccounts: boolean
     orgConfigured: boolean
     companyName: string
-    session: { kind: string; accountId: number | null } | null
+    session: { kind: string; accountId: number | null; tenantId?: number | null } | null
   }>('/api/bootstrap')
 }
 
@@ -76,6 +89,34 @@ export async function requestPasswordReset(email: string) {
   return api<{ ok: true; message: string }>('/api/auth/forgot-password', {
     method: 'POST',
     body: JSON.stringify({ email }),
+  })
+}
+
+export async function fetchPasswordSetup(token: string) {
+  return api<{
+    ok: true
+    email: string
+    displayName: string
+    purpose: 'invite' | 'reset' | string
+  }>(`/api/auth/password-setup?token=${encodeURIComponent(token)}`)
+}
+
+export async function completePasswordSetup(token: string, password: string) {
+  return api<{ ok: true; message: string; email: string }>('/api/auth/password-setup', {
+    method: 'POST',
+    body: JSON.stringify({ token, password }),
+  })
+}
+
+export async function signupFirstAdmin(payload: {
+  email: string
+  displayName: string
+  password: string
+  companyName?: string
+}) {
+  return api<{ account: PublicAccount; tenant?: PublicTenant }>('/api/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 
@@ -222,12 +263,20 @@ export async function createAccountRequest(payload: {
   displayName: string
   role: 'admin' | 'employee'
   employeeId: number | null
-  password: string
+  password?: string
+  invite?: boolean
   jobTitle?: string
 }) {
-  return api<{ account: PublicAccount }>('/api/accounts', {
+  return api<{ account: PublicAccount; invited?: boolean }>('/api/accounts', {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+export async function resendInviteRequest(id: number) {
+  return api<{ ok: true; account: PublicAccount }>(`/api/accounts/${id}/resend-invite`, {
+    method: 'POST',
+    body: '{}',
   })
 }
 
@@ -241,8 +290,21 @@ export async function updateAccountRequest(
   })
 }
 
-export async function recoveryListAccounts() {
-  return api<{ accounts: PublicAccount[] }>('/api/recovery/accounts')
+export async function recoveryListTenants() {
+  return api<{ tenants: PublicTenant[] }>('/api/recovery/tenants')
+}
+
+export async function recoveryCreateTenant(name: string) {
+  return api<{ tenant: PublicTenant }>('/api/recovery/tenants', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function recoveryListAccounts(tenantId: number) {
+  return api<{ accounts: PublicAccount[]; tenant: PublicTenant }>(
+    `/api/recovery/accounts?tenantId=${encodeURIComponent(String(tenantId))}`,
+  )
 }
 
 export async function recoveryCreateAccount(payload: {
@@ -251,8 +313,10 @@ export async function recoveryCreateAccount(payload: {
   password: string
   role?: 'admin' | 'employee'
   jobTitle?: string
+  tenantId?: number
+  organisationName?: string
 }) {
-  return api<{ account: PublicAccount }>('/api/recovery/accounts', {
+  return api<{ account: PublicAccount; tenant?: PublicTenant }>('/api/recovery/accounts', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

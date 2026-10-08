@@ -1,7 +1,5 @@
 import {
-  countWorkingDaysInRange,
   normalizeWorkingDays,
-  overlapWorkingDays,
   parseIsoDate,
   type AbsenceRecord,
   type BankHoliday,
@@ -9,6 +7,14 @@ import {
 import { absenceInLeaveYear, requestInLeaveYear, type LeaveYearPeriod } from './leaveYear'
 import { leaveAdjustmentNet, type LeaveAdjustment } from './leaveAdjustments'
 import { isAnnualLeaveRequest, type LeaveRequestType } from './leaveTypes'
+import {
+  absenceDaysInLeaveYear,
+  countLeaveWorkingDays,
+  leaveDaysInLeaveYearWithHalves,
+  type DayHalf,
+} from './leaveDays'
+import { toIsoDate } from './calendarUtils'
+import { appToday } from './domain'
 
 export type EntitlementMode = 'proRata' | 'custom'
 
@@ -22,6 +28,8 @@ export type LeaveRequestLike = {
   source?: 'mandatory'
   start?: string
   end?: string
+  startHalf?: DayHalf
+  endHalf?: DayHalf
 }
 
 export type CompanyEntitlementSettings = {
@@ -143,29 +151,72 @@ export function proRataPercentage(
   return Math.round((employeeCount / fullTimeCount) * 100)
 }
 
+function todayIso() {
+  return toIsoDate(appToday())
+}
+
+function annualLeaveAbsences(
+  absences: AbsenceRecord[],
+  employeeId: number,
+  leaveYear?: LeaveYearPeriod,
+) {
+  return absences.filter(
+    (record) =>
+      record.employeeId === employeeId &&
+      record.type === 'annual_leave' &&
+      (!leaveYear || absenceInLeaveYear(record, leaveYear)),
+  )
+}
+
+/** Approved annual leave that has already finished (past). */
 export function annualLeaveTaken(
   absences: AbsenceRecord[],
   employeeId: number,
   workingDays?: number[],
   leaveYear?: LeaveYearPeriod,
+  asOf = todayIso(),
 ) {
-  const pattern = normalizeWorkingDays(workingDays)
-  return absences
-    .filter(
-      (record) =>
-        record.employeeId === employeeId &&
-        record.type === 'annual_leave' &&
-        (!leaveYear || absenceInLeaveYear(record, leaveYear)),
-    )
-    .reduce((total, record) => {
-      if (!leaveYear) {
-        return total + countWorkingDaysInRange(record.start, record.end, pattern)
-      }
-      return (
+  return annualLeaveAbsences(absences, employeeId, leaveYear)
+    .filter((record) => record.end < asOf)
+    .reduce(
+      (total, record) =>
         total +
-        overlapWorkingDays(record.start, record.end, leaveYear.start, leaveYear.end, pattern)
-      )
-    }, 0)
+        absenceDaysInLeaveYear(record.start, record.end, record.amount, leaveYear, workingDays),
+      0,
+    )
+}
+
+/** Approved annual leave that is today or still upcoming. */
+export function annualLeaveBooked(
+  absences: AbsenceRecord[],
+  employeeId: number,
+  workingDays?: number[],
+  leaveYear?: LeaveYearPeriod,
+  asOf = todayIso(),
+) {
+  return annualLeaveAbsences(absences, employeeId, leaveYear)
+    .filter((record) => record.end >= asOf)
+    .reduce(
+      (total, record) =>
+        total +
+        absenceDaysInLeaveYear(record.start, record.end, record.amount, leaveYear, workingDays),
+      0,
+    )
+}
+
+/** Taken + booked — total approved annual leave charged to the leave year. */
+export function annualLeaveApprovedDays(
+  absences: AbsenceRecord[],
+  employeeId: number,
+  workingDays?: number[],
+  leaveYear?: LeaveYearPeriod,
+) {
+  return annualLeaveAbsences(absences, employeeId, leaveYear).reduce(
+    (total, record) =>
+      total +
+      absenceDaysInLeaveYear(record.start, record.end, record.amount, leaveYear, workingDays),
+    0,
+  )
 }
 
 export function pendingLeaveDays(
@@ -176,7 +227,6 @@ export function pendingLeaveDays(
   employeeName?: string,
   workingDays?: number[],
 ) {
-  const pattern = normalizeWorkingDays(workingDays)
   return requests
     .filter(
       (request) =>
@@ -196,7 +246,26 @@ export function pendingLeaveDays(
       if (leaveYear && request.start && request.end) {
         return (
           total +
-          overlapWorkingDays(request.start, request.end, leaveYear.start, leaveYear.end, pattern)
+          leaveDaysInLeaveYearWithHalves(
+            request.start,
+            request.end,
+            leaveYear,
+            workingDays,
+            request.startHalf,
+            request.endHalf,
+          )
+        )
+      }
+      if (request.start && request.end) {
+        return (
+          total +
+          countLeaveWorkingDays(
+            request.start,
+            request.end,
+            workingDays,
+            request.startHalf,
+            request.endHalf,
+          )
         )
       }
       return total + parseDurationDays(request.duration)
@@ -209,14 +278,10 @@ export function leaveDaysInLeaveYear(
   end: string,
   leaveYear: LeaveYearPeriod,
   workingDays?: number[],
+  startHalf: DayHalf = 'full',
+  endHalf: DayHalf = 'full',
 ) {
-  return overlapWorkingDays(
-    start,
-    end,
-    leaveYear.start,
-    leaveYear.end,
-    normalizeWorkingDays(workingDays),
-  )
+  return leaveDaysInLeaveYearWithHalves(start, end, leaveYear, workingDays, startHalf, endHalf)
 }
 
 export function remainingAnnualLeave(
@@ -232,7 +297,12 @@ export function remainingAnnualLeave(
 ) {
   const allowance = totalLeaveAllowance(employee, company, bankHolidays)
   const adjustmentNet = leaveAdjustmentNet(adjustments, employee.id, leaveYear)
-  const taken = annualLeaveTaken(absences, employee.id, employee.workingDays, leaveYear)
+  const approved = annualLeaveApprovedDays(
+    absences,
+    employee.id,
+    employee.workingDays,
+    leaveYear,
+  )
   const pending = pendingLeaveDays(
     requests,
     employee.id,
@@ -241,7 +311,7 @@ export function remainingAnnualLeave(
     employee.name,
     employee.workingDays,
   )
-  return allowance + adjustmentNet - taken - pending - additionalDays
+  return allowance + adjustmentNet - approved - pending - additionalDays
 }
 
 export function formatBalanceAmount(amount: number, unit: string) {

@@ -14,10 +14,12 @@ import {
 } from '../domain'
 import { defaultProbationEndDate, DEFAULT_PROBATION_MONTHS } from '../hrTasks'
 import {
+  annualLeaveBooked,
   annualLeaveTaken,
   bookableEntitlement,
   describeBookableEntitlement,
   effectiveEntitlement,
+  pendingLeaveDays,
   proRataPercentage,
   remainingAnnualLeave,
   type EntitlementMode,
@@ -277,9 +279,15 @@ export function AddEmployeeModal({
   company: CompanySettings
   bankHolidays: BankHoliday[]
   onClose: () => void
-  onSave: (employee: Omit<Employee, 'id' | 'initials' | 'color'>) => void
+  onSave: (
+    employee: Omit<Employee, 'id' | 'initials' | 'color'>,
+    options: { email: string; sendInvite: boolean },
+  ) => void | Promise<void>
 }) {
   const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [sendInvite, setSendInvite] = useState(true)
+  const [busy, setBusy] = useState(false)
   const [role, setRole] = useState('')
   const [startDate, setStartDate] = useState(toIsoDate(appToday()))
   const [probationEndDate, setProbationEndDate] = useState(
@@ -323,7 +331,7 @@ export function AddEmployeeModal({
         <div className="modal-header">
           <div>
             <span className="eyebrow">People directory</span>
-            <h2 id="add-employee-title">Add employee</h2>
+            <h2 id="add-employee-title">Add and invite employee</h2>
           </div>
           <button type="button" className="close-button" onClick={onClose} aria-label="Close">
             <X size={18} />
@@ -337,6 +345,28 @@ export function AddEmployeeModal({
               onChange={(event) => setName(event.target.value)}
               placeholder="e.g. Jordan Lee"
             />
+          </label>
+          <label>
+            Work email
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="e.g. jordan@example.com"
+            />
+          </label>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={sendInvite}
+              onChange={(event) => setSendInvite(event.target.checked)}
+            />
+            <span>
+              <strong>Send invite email</strong>
+              <span className="field-helper">
+                They receive a link to set their own password (default role: Employee).
+              </span>
+            </span>
           </label>
           <label>
             Job title
@@ -467,24 +497,43 @@ export function AddEmployeeModal({
           <button
             type="button"
             className="button button-primary"
-            disabled={!name.trim() || !role.trim() || !startDate}
-            onClick={() =>
-              onSave({
-                name: name.trim(),
-                role: role.trim(),
-                entitlement,
-                entitlementUnit:
-                  entitlementMode === 'proRata' ? company.defaultEntitlementUnit : entitlementUnit,
-                rollOver,
-                workingDays: normalizeWorkingDays(workingDays),
-                entitlementMode,
-                status: 'Active',
-                startDate,
-                probationEndDate: probationEndDate || null,
-              })
+            disabled={
+              busy ||
+              !name.trim() ||
+              !role.trim() ||
+              !startDate ||
+              (sendInvite && !email.trim())
             }
+            onClick={() => {
+              void (async () => {
+                setBusy(true)
+                try {
+                  await onSave(
+                    {
+                      name: name.trim(),
+                      role: role.trim(),
+                      entitlement,
+                      entitlementUnit:
+                        entitlementMode === 'proRata'
+                          ? company.defaultEntitlementUnit
+                          : entitlementUnit,
+                      rollOver,
+                      workingDays: normalizeWorkingDays(workingDays),
+                      entitlementMode,
+                      status: 'Active',
+                      startDate,
+                      probationEndDate: probationEndDate || null,
+                    },
+                    { email: email.trim().toLowerCase(), sendInvite },
+                  )
+                } finally {
+                  setBusy(false)
+                }
+              })()
+            }}
           >
-            Add employee <ChevronRight size={15} />
+            {busy ? 'Saving…' : sendInvite ? 'Add and invite' : 'Add employee'}{' '}
+            <ChevronRight size={15} />
           </button>
         </div>
       </div>
@@ -527,14 +576,28 @@ export function EmployeeLeaveHistoryModal({
   const yearAdjustments = adjustmentsForEmployeeYear(adjustments, employee.id, leaveYear)
   const adjustmentNet = leaveAdjustmentNet(adjustments, employee.id, leaveYear)
 
-  const annualLeaveTakenAmount = annualLeaveTaken(
+  const takenAmount = annualLeaveTaken(
     absences,
     employee.id,
     employee.workingDays,
     leaveYear,
   )
+  const bookedAmount = annualLeaveBooked(
+    absences,
+    employee.id,
+    employee.workingDays,
+    leaveYear,
+  )
+  const pendingAmount = pendingLeaveDays(
+    requests,
+    employee.id,
+    leaveYear,
+    undefined,
+    employee.name,
+    employee.workingDays,
+  )
 
-  const remaining = remainingAnnualLeave(
+  const available = remainingAnnualLeave(
     employee,
     entitlementSettings,
     bankHolidays,
@@ -567,36 +630,38 @@ export function EmployeeLeaveHistoryModal({
           </button>
         </div>
         <div className="modal-form">
-          <div className="leave-summary-row leave-history-summary">
-            <div>
-              <span className="card-label">
-                {company.entitlementIncludesBankHolidays ? 'Contract total' : 'Entitlement'}
-              </span>
-              <div className="summary-number">
-                {contractAllowance} <span>{employee.entitlementUnit}</span>
-              </div>
-            </div>
-            {company.entitlementIncludesBankHolidays && (
-              <div>
-                <span className="card-label">Bookable</span>
-                <div className="summary-number">
-                  {bookableAllowance} <span>{employee.entitlementUnit}</span>
-                </div>
-              </div>
-            )}
+          <div className="leave-summary-row leave-summary-row-balance leave-history-summary">
             <div>
               <span className="card-label">Taken</span>
               <div className="summary-number">
-                {annualLeaveTakenAmount} <span>{employee.entitlementUnit}</span>
+                {takenAmount} <span>{employee.entitlementUnit}</span>
               </div>
             </div>
             <div>
-              <span className="card-label">Remaining</span>
-              <div
-                className={`summary-number coral-number ${remaining < 0 ? 'negative-number' : ''}`}
-              >
-                {remaining} <span>{employee.entitlementUnit}</span>
+              <span className="card-label">Booked</span>
+              <div className="summary-number">
+                {bookedAmount} <span>{employee.entitlementUnit}</span>
               </div>
+            </div>
+            <div>
+              <span className="card-label">Pending</span>
+              <div className="summary-number">
+                {pendingAmount} <span>{employee.entitlementUnit}</span>
+              </div>
+            </div>
+            <div>
+              <span className="card-label">Available</span>
+              <div
+                className={`summary-number coral-number ${available < 0 ? 'negative-number' : ''}`}
+              >
+                {available} <span>{employee.entitlementUnit}</span>
+              </div>
+              <p className="field-helper inline-helper">
+                Of {bookableAllowance + employee.rollOver} {employee.entitlementUnit}
+                {company.entitlementIncludesBankHolidays
+                  ? ` (${contractAllowance} contract)`
+                  : ''}
+              </p>
             </div>
           </div>
           <EntitlementBasisNote includesBankHolidays={company.entitlementIncludesBankHolidays} />

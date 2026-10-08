@@ -1,4 +1,9 @@
 import nodemailer from 'nodemailer'
+import {
+  accountsForTenant,
+  ensureTenantAppData,
+  tenantDisplayName,
+} from './tenants.mjs'
 
 const EVENT_IDS = new Set([
   'leaveRequestSubmitted',
@@ -84,12 +89,8 @@ export async function sendMail({ to, subject, text, attachments }) {
   return { ok: true, recipients }
 }
 
-function companyName(store) {
-  return store.appData?.company?.name?.trim() || 'Finch'
-}
-
-function activeAdmins(store, { excludeAccountId } = {}) {
-  return store.accounts.filter(
+function activeAdmins(store, tenantId, { excludeAccountId } = {}) {
+  return accountsForTenant(store, tenantId).filter(
     (account) =>
       account.role === 'admin' &&
       account.status === 'Active' &&
@@ -98,10 +99,10 @@ function activeAdmins(store, { excludeAccountId } = {}) {
   )
 }
 
-function accountForEmployee(store, employeeId) {
+function accountForEmployee(store, tenantId, employeeId) {
   if (employeeId == null) return null
   return (
-    store.accounts.find(
+    accountsForTenant(store, tenantId).find(
       (account) =>
         account.employeeId === Number(employeeId) &&
         account.status === 'Active' &&
@@ -214,7 +215,12 @@ export async function dispatchNotificationEmail({
     return { ok: false, reason: 'invalid_event' }
   }
 
-  const company = store.appData?.company || {}
+  const tenantId = actor?.tenantId
+  if (tenantId == null) {
+    return { ok: false, reason: 'forbidden' }
+  }
+
+  const company = ensureTenantAppData(store, tenantId).company || {}
   if (!shouldSendEvent(company, eventId)) {
     return { ok: false, reason: 'disabled_by_settings' }
   }
@@ -224,7 +230,7 @@ export async function dispatchNotificationEmail({
     return { ok: false, reason: 'smtp_not_configured' }
   }
 
-  const label = companyName(store)
+  const label = tenantDisplayName(store, tenantId)
   const message = buildMessage(eventId, label, details)
   if (!message) {
     return { ok: false, reason: 'invalid_event' }
@@ -237,12 +243,14 @@ export async function dispatchNotificationEmail({
     eventId === 'probationEnding' ||
     eventId === 'documentUpdated'
   ) {
-    recipients = activeAdmins(store, { excludeAccountId: actor?.id }).map((item) => item.email)
+    recipients = activeAdmins(store, tenantId, { excludeAccountId: actor?.id }).map(
+      (item) => item.email,
+    )
   } else if (eventId === 'leaveRequestReviewed' || eventId === 'expenseClaimReviewed') {
     if (actor?.role !== 'admin') {
       return { ok: false, reason: 'forbidden' }
     }
-    const subjectAccount = accountForEmployee(store, employeeId)
+    const subjectAccount = accountForEmployee(store, tenantId, employeeId)
     if (subjectAccount?.email) recipients = [subjectAccount.email]
   }
 

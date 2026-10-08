@@ -27,6 +27,8 @@ export type ExpenseStatus = 'Pending' | 'Approved' | 'Declined'
 export type SettingsTab = 'company' | 'leave' | 'notifications' | 'security' | 'payroll'
 export type TwoFactorPolicy = 'all' | 'admins' | 'optional'
 
+export type DayHalf = 'full' | 'AM' | 'PM'
+
 export type LeaveAmendment = {
   start: string
   end: string
@@ -34,6 +36,8 @@ export type LeaveAmendment = {
   duration: string
   note: string
   requestedAt: string
+  startHalf?: DayHalf
+  endHalf?: DayHalf
 }
 
 export type PortalMessageAuthor = 'employee' | 'admin'
@@ -61,6 +65,10 @@ export type LeaveRequest = {
   leaveType?: LeaveRequestType
   start?: string
   end?: string
+  /** Half-day portion for the first day (default full). */
+  startHalf?: DayHalf
+  /** Half-day portion for the last day (default full; ignored when start === end). */
+  endHalf?: DayHalf
   absenceId?: number
   pendingAmendment?: LeaveAmendment
   /** Created by company mandatory leave confirmation */

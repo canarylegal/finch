@@ -16,9 +16,11 @@ import {
   type LeaveYearPeriod,
 } from '../leaveYear'
 import {
+  annualLeaveBooked,
   annualLeaveTaken,
   bookableEntitlement,
   effectiveEntitlement,
+  pendingLeaveDays,
   remainingAnnualLeave,
   totalLeaveAllowance,
 } from '../leaveBalance'
@@ -73,8 +75,21 @@ export function MyLeavePage({
   const taken = employee
     ? annualLeaveTaken(absences, employee.id, employee.workingDays, viewYear)
     : 0
+  const booked = employee
+    ? annualLeaveBooked(absences, employee.id, employee.workingDays, viewYear)
+    : 0
+  const pending = employee
+    ? pendingLeaveDays(
+        requests,
+        employee.id,
+        viewYear,
+        undefined,
+        employee.name,
+        employee.workingDays,
+      )
+    : 0
   const adjustmentNet = employee ? leaveAdjustmentNet(adjustments, employee.id, viewYear) : 0
-  const remaining = employee
+  const available = employee
     ? remainingAnnualLeave(
         employee,
         entitlementSettings,
@@ -91,6 +106,9 @@ export function MyLeavePage({
   const totalEntitlement = employee
     ? totalLeaveAllowance(employee, entitlementSettings, bankHolidays)
     : 0
+
+  const formatAmount = (value: number) =>
+    Number.isInteger(value) ? value : Math.round(value * 10) / 10
   const employeeRequests = employee
     ? requests
         .filter(
@@ -156,46 +174,55 @@ export function MyLeavePage({
               the current leave year is closed.
             </p>
           )}
-          <div className="leave-summary-row">
+          <div className="leave-summary-row leave-summary-row-balance">
             <div>
-              <span className="card-label">{formatLeaveYearLabel(viewYear)} entitlement</span>
+              <span className="card-label">Taken</span>
               <div className="summary-number">
-                {totalEntitlement} <span>{employee?.entitlementUnit ?? 'days'}</span>
+                {formatAmount(taken)} <span>{employee?.entitlementUnit ?? 'days'}</span>
               </div>
+              <p className="field-helper inline-helper">Already used</p>
+            </div>
+            <div>
+              <span className="card-label">Booked</span>
+              <div className="summary-number">
+                {formatAmount(booked)} <span>{employee?.entitlementUnit ?? 'days'}</span>
+              </div>
+              <p className="field-helper inline-helper">Approved upcoming</p>
+            </div>
+            <div>
+              <span className="card-label">Pending</span>
+              <div className="summary-number">
+                {formatAmount(pending)} <span>{employee?.entitlementUnit ?? 'days'}</span>
+              </div>
+              <p className="field-helper inline-helper">Awaiting approval</p>
+            </div>
+            <div>
+              <span className="card-label">Available</span>
+              <div
+                className={`summary-number coral-number ${available < 0 ? 'negative-number' : ''}`}
+              >
+                {employee ? formatAmount(available) : '—'}{' '}
+                <span>{employee?.entitlementUnit ?? 'days'}</span>
+              </div>
+              {employee && (
+                <p className="field-helper inline-helper">
+                  Of {formatAmount(totalEntitlement)} {employee.entitlementUnit}
+                  {adjustmentNet !== 0
+                    ? ` · ${formatAdjustmentSigned(adjustmentNet, employee.entitlementUnit)} adj.`
+                    : ''}
+                </p>
+              )}
               {employee?.entitlementMode === 'proRata' && yearView === 'current' && (
                 <p className="field-helper inline-helper">
                   {allowance} pro-rated
                   {employee.rollOver > 0 ? ` + ${employee.rollOver} roll-over` : ''}
-                  {company.entitlementIncludesBankHolidays ? ' bookable days' : ''}
+                  {company.entitlementIncludesBankHolidays ? ' bookable' : ''}
                 </p>
               )}
               {company.entitlementIncludesBankHolidays && employee && yearView === 'current' && (
                 <p className="field-helper inline-helper">
                   {effectiveEntitlement(employee, entitlementSettings)} {employee.entitlementUnit}{' '}
                   incl. bank holidays
-                </p>
-              )}
-            </div>
-            <div>
-              <span className="card-label">Taken</span>
-              <div className="summary-number">
-                {taken} <span>{employee?.entitlementUnit ?? 'days'}</span>
-              </div>
-            </div>
-            <div>
-              <span className="card-label">Remaining</span>
-              <div className={`summary-number coral-number ${remaining < 0 ? 'negative-number' : ''}`}>
-                {employee
-                  ? Number.isInteger(remaining)
-                    ? remaining
-                    : Math.round(remaining * 10) / 10
-                  : '—'}{' '}
-                <span>{employee?.entitlementUnit ?? 'days'}</span>
-              </div>
-              {adjustmentNet !== 0 && employee && (
-                <p className="field-helper inline-helper">
-                  Includes {formatAdjustmentSigned(adjustmentNet, employee.entitlementUnit)}{' '}
-                  adjustments
                 </p>
               )}
             </div>
