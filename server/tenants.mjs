@@ -22,6 +22,23 @@ export function emptyTenant({ id, name }) {
   }
 }
 
+/** Ensure counters never reuse ids that already exist in the store. */
+export function reconcileIdCounters(store) {
+  let maxAccountId = 0
+  for (const account of store.accounts || []) {
+    const id = Number(account?.id)
+    if (Number.isFinite(id) && id > maxAccountId) maxAccountId = id
+  }
+  let maxTenantId = 0
+  for (const tenant of store.tenants || []) {
+    const id = Number(tenant?.id)
+    if (Number.isFinite(id) && id > maxTenantId) maxTenantId = id
+  }
+  store.nextAccountId = Math.max(Number(store.nextAccountId) || 1, maxAccountId + 1)
+  store.nextTenantId = Math.max(Number(store.nextTenantId) || 1, maxTenantId + 1)
+  return store
+}
+
 /**
  * Migrate legacy single-company store shape to multi-tenant in place.
  * Safe to call on every read.
@@ -42,7 +59,7 @@ export function normalizeStore(store) {
     if (!Array.isArray(store.accounts)) store.accounts = []
     if (typeof store.nextAccountId !== 'number') store.nextAccountId = 1
     if (typeof store.nextTenantId !== 'number') store.nextTenantId = 1
-    return store
+    return reconcileIdCounters(store)
   }
 
   // Legacy v1: { accounts, appData, nextAccountId }
@@ -76,7 +93,7 @@ export function normalizeStore(store) {
     },
   }
   delete store.appData
-  return store
+  return reconcileIdCounters(store)
 }
 
 export function listTenants(store) {

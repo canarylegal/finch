@@ -252,7 +252,15 @@ export async function fetchAppData() {
 }
 
 export async function saveAppData(data: Record<string, unknown>) {
-  return api<{ ok: true; auditEvents?: import('./auditLog').AuditEvent[] }>('/api/app-data', {
+  return api<{
+    ok: true
+    auditEvents?: import('./auditLog').AuditEvent[]
+    data?: Record<string, unknown>
+    idRemap?: {
+      requests: Array<{ from: number; to: number }>
+      expenseClaims: Array<{ from: number; to: number }>
+    }
+  }>('/api/app-data', {
     method: 'PUT',
     body: JSON.stringify(data),
   })

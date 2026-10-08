@@ -365,10 +365,18 @@ describe('app-data authorization', () => {
 
     const afterEmployee = await server.api('/api/app-data', { cookie: employeeCookie })
     assert.equal(afterEmployee.status, 200)
+    // Collision is remapped to a fresh id — submission is kept, victim id is not claimed.
     assert.equal(
       (afterEmployee.payload.requests || []).some((request) => request.id === 501),
       false,
     )
+    assert.ok(
+      (afterEmployee.payload.requests || []).some(
+        (request) => request.employeeId === 2 && request.note === 'spoof',
+      ),
+    )
+    assert.ok(Array.isArray(attack.payload.idRemap?.requests))
+    assert.ok(attack.payload.idRemap.requests.some((item) => item.from === 501 && item.to !== 501))
     assert.equal(
       (afterEmployee.payload.portalMessages || []).some(
         (message) =>
@@ -385,6 +393,101 @@ describe('app-data authorization', () => {
     assert.equal(victimRequest.employeeId, 3)
     assert.ok(
       (afterAdmin.payload.portalMessages || []).some((message) => message.id === 9001),
+    )
+  })
+
+  test('employee leave/expense creates colliding with another id are remapped and returned', async () => {
+    const adminView = await server.api('/api/app-data', { cookie: adminCookie })
+    const seeded = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: {
+        ...adminView.payload,
+        requests: [
+          ...(adminView.payload.requests || []).filter((item) => item.employeeId !== 2),
+          {
+            id: 1,
+            employeeId: 1,
+            type: 'Annual leave',
+            start: '2026-08-01',
+            end: '2026-08-01',
+            days: 1,
+            status: 'Pending',
+            note: 'admin owned id 1',
+          },
+        ],
+        expenseClaims: [
+          ...(adminView.payload.expenseClaims || []).filter((item) => item.employeeId !== 2),
+          {
+            id: 1,
+            employeeId: 1,
+            status: 'Pending',
+            title: 'admin expense',
+            amount: 10,
+            date: '2026-08-01',
+          },
+        ],
+      },
+    })
+    assert.equal(seeded.status, 200)
+
+    const employeeView = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(employeeView.status, 200)
+
+    const create = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: employeeCookie,
+      body: {
+        ...employeeView.payload,
+        requests: [
+          {
+            id: 1,
+            employeeId: 2,
+            type: 'Annual leave',
+            start: '2026-09-01',
+            end: '2026-09-01',
+            days: 1,
+            status: 'Pending',
+            note: 'employee leave',
+          },
+        ],
+        expenseClaims: [
+          {
+            id: 1,
+            employeeId: 2,
+            status: 'Pending',
+            title: 'employee expense',
+            amount: 22,
+            date: '2026-09-01',
+          },
+        ],
+      },
+    })
+    assert.equal(create.status, 200)
+    assert.ok(create.payload.data)
+    assert.ok(
+      (create.payload.data.requests || []).some(
+        (request) => request.note === 'employee leave' && request.id !== 1,
+      ),
+    )
+    assert.ok(
+      (create.payload.data.expenseClaims || []).some(
+        (claim) => claim.title === 'employee expense' && claim.id !== 1,
+      ),
+    )
+    assert.ok(create.payload.idRemap.requests.some((item) => item.from === 1))
+    assert.ok(create.payload.idRemap.expenseClaims.some((item) => item.from === 1))
+
+    const adminAfter = await server.api('/api/app-data', { cookie: adminCookie })
+    assert.ok(
+      (adminAfter.payload.requests || []).some(
+        (request) => request.id === 1 && request.employeeId === 1,
+      ),
+    )
+    assert.ok(
+      (adminAfter.payload.expenseClaims || []).some(
+        (claim) => claim.id === 1 && claim.employeeId === 1,
+      ),
     )
   })
 
@@ -546,6 +649,66 @@ describe('multi-tenant isolation', () => {
       (alphaAfter.payload.accounts || []).some((item) => item.email === 'beta-admin@example.com'),
       false,
     )
+  })
+
+  test('password change cannot overwrite a concurrent signup', async () => {
+    const alphaSignup = await server.api('/api/auth/signup', {
+      method: 'POST',
+      body: {
+        email: 'stale-alpha@example.com',
+        displayName: 'Stale Alpha',
+        password: 'stale-password-a1',
+        companyName: 'Stale Alpha Ltd',
+      },
+    })
+    assert.equal(alphaSignup.status, 201)
+    const alphaCookie = server.cookieHeader(alphaSignup.cookies)
+
+    // Begin password change auth against the pre-signup world, then race a signup.
+    const [passwordChange, betaSignup] = await Promise.all([
+      server.api('/api/auth/change-password', {
+        method: 'POST',
+        cookie: alphaCookie,
+        body: {
+          currentPassword: 'stale-password-a1',
+          newPassword: 'stale-password-a2',
+        },
+      }),
+      server.api('/api/auth/signup', {
+        method: 'POST',
+        body: {
+          email: 'stale-beta@example.com',
+          displayName: 'Stale Beta',
+          password: 'stale-password-b1',
+          companyName: 'Stale Beta Ltd',
+        },
+      }),
+    ])
+    assert.equal(passwordChange.status, 200)
+    assert.equal(betaSignup.status, 201)
+
+    const betaCookie = server.cookieHeader(betaSignup.cookies)
+    const betaData = await server.api('/api/app-data', { cookie: betaCookie })
+    assert.equal(betaData.status, 200)
+    assert.equal(betaData.payload.company?.name, 'Stale Beta Ltd')
+
+    // A later signup must not reuse beta's identities.
+    const gammaSignup = await server.api('/api/auth/signup', {
+      method: 'POST',
+      body: {
+        email: 'stale-gamma@example.com',
+        displayName: 'Stale Gamma',
+        password: 'stale-password-c1',
+        companyName: 'Stale Gamma Ltd',
+      },
+    })
+    assert.equal(gammaSignup.status, 201)
+    assert.notEqual(gammaSignup.payload.account.id, betaSignup.payload.account.id)
+    assert.notEqual(gammaSignup.payload.account.tenantId, betaSignup.payload.account.tenantId)
+
+    const betaStill = await server.api('/api/app-data', { cookie: betaCookie })
+    assert.equal(betaStill.status, 200)
+    assert.equal(betaStill.payload.company?.name, 'Stale Beta Ltd')
   })
 
   test('concurrent signups allocate distinct tenants and keep sessions isolated', async () => {

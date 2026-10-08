@@ -161,8 +161,16 @@ function mergeOwnCollection({
     if (!item || !belongsToActor(item)) continue
     const existing = server.find((row) => row.id === item.id)
 
-    // Reject client ids that already belong to someone else.
-    if (existing && !belongsToActor(existing)) continue
+    // Client id already owned by someone else: treat as a create and allocate a
+    // fresh server id (do not silently drop the submission).
+    if (existing && !belongsToActor(existing)) {
+      if (!canAcceptIncoming(item, null)) continue
+      const serverId = nextId++
+      claimedIds.add(serverId)
+      idRemap.set(item.id, serverId)
+      accepted.push({ ...item, id: serverId })
+      continue
+    }
 
     if (!existing) {
       if (!canAcceptIncoming(item, null)) continue
@@ -424,5 +432,15 @@ export function applyAppDataWrite(store, account, incoming, { createAuditEventFn
     auditEvents: current.auditEvents,
   }
 
-  return { ok: true, auditEvents: [] }
+  const remapEntries = (remap) =>
+    [...remap.entries()].filter(([from, to]) => from !== to).map(([from, to]) => ({ from, to }))
+
+  return {
+    ok: true,
+    auditEvents: [],
+    idRemap: {
+      requests: remapEntries(requestMerge.idRemap),
+      expenseClaims: remapEntries(expenseMerge.idRemap),
+    },
+  }
 }

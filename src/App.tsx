@@ -363,7 +363,9 @@ function App() {
         pendingAuditAppendRef.current = [...appendBatch, ...pendingAuditAppendRef.current]
         return false
       }
-      if (Array.isArray(result.data.auditEvents)) {
+      if (result.data.data && typeof result.data.data === 'object') {
+        applyAppData(result.data.data)
+      } else if (Array.isArray(result.data.auditEvents)) {
         setAuditEvents(result.data.auditEvents)
       }
       return true
