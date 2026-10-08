@@ -198,15 +198,14 @@ function mergeOwnCollection({
     accepted.push({ ...item, id: existing.id })
   }
 
-  // Keep server-owned actor rows that the client omitted only when they are
-  // terminal statuses the client is not allowed to revert.
+  // Omission from a stale client snapshot is not a delete. Keep any server-owned
+  // actor rows the client did not include (pending and terminal alike). Explicit
+  // status changes (e.g. Cancelled) must appear in the incoming payload.
   const acceptedIds = new Set(accepted.map((item) => item.id))
   for (const item of server) {
     if (!belongsToActor(item) || acceptedIds.has(item.id)) continue
-    if (item.status === 'Approved' || item.status === 'Declined' || item.status === 'Cancelled') {
-      accepted.push(item)
-      idRemap.set(item.id, item.id)
-    }
+    accepted.push(item)
+    idRemap.set(item.id, item.id)
   }
   return { items: [...others, ...accepted], idRemap }
 }
@@ -311,20 +310,28 @@ function mergeEmployeeDocuments(serverFolders, serverDocs, _incomingFolders, inc
   // Folders and sharing permissions are admin-managed. Employees cannot create
   // folders, change visibility, or claim another folder's id as "shared".
   const serverSharedIds = sharedFolderIdsForEmployee(serverFolders, employeeId)
-
-  const docs = asArray(serverDocs).filter(
+  const others = asArray(serverDocs).filter(
     (doc) => !(doc.employeeId === employeeId && serverSharedIds.has(doc.folderId)),
   )
-  const acceptedDocs = asArray(incomingDocs).filter(
-    (doc) =>
-      doc &&
-      doc.employeeId === employeeId &&
-      typeof doc.folderId === 'number' &&
-      serverSharedIds.has(doc.folderId),
+  const ownById = new Map(
+    asArray(serverDocs)
+      .filter((doc) => doc && doc.employeeId === employeeId && serverSharedIds.has(doc.folderId))
+      .map((doc) => [doc.id, doc]),
   )
+  for (const doc of asArray(incomingDocs)) {
+    if (
+      !doc ||
+      doc.employeeId !== employeeId ||
+      typeof doc.folderId !== 'number' ||
+      !serverSharedIds.has(doc.folderId)
+    ) {
+      continue
+    }
+    ownById.set(doc.id, doc)
+  }
   return {
     documentFolders: asArray(serverFolders),
-    employeeDocuments: [...docs, ...acceptedDocs],
+    employeeDocuments: [...others, ...ownById.values()],
   }
 }
 

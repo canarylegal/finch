@@ -195,6 +195,25 @@ function App() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(empty.auditEvents)
   const pendingAuditAppendRef = useRef<AuditEvent[]>([])
   const persistChainRef = useRef(Promise.resolve(true))
+  const persistEpochRef = useRef(0)
+  const appDataSnapshotRef = useRef({
+    employees: empty.employees,
+    absences: empty.absences,
+    company: empty.company,
+    bankHolidays: empty.bankHolidays,
+    requests: empty.requests,
+    portalMessages: empty.portalMessages,
+    documentFolders: empty.documentFolders,
+    employeeDocuments: empty.employeeDocuments,
+    accounts: empty.accounts,
+    expenseClaims: empty.expenseClaims,
+    vatReceipts: empty.vatReceipts,
+    taskDismissals: empty.taskDismissals,
+    policies: empty.policies,
+    leaveAdjustments: empty.leaveAdjustments,
+    leaveYearClosures: empty.leaveYearClosures,
+    auditEvents: empty.auditEvents,
+  })
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('company')
   const [absences, setAbsences] = useState<AbsenceRecord[]>(empty.absences)
   const [bankHolidays, setBankHolidays] = useState<BankHoliday[]>(empty.bankHolidays)
@@ -322,6 +341,75 @@ function App() {
     return true
   }
 
+  useEffect(() => {
+    appDataSnapshotRef.current = {
+      employees,
+      absences,
+      company,
+      bankHolidays,
+      requests,
+      portalMessages,
+      documentFolders,
+      employeeDocuments,
+      accounts,
+      expenseClaims,
+      vatReceipts,
+      taskDismissals,
+      policies,
+      leaveAdjustments,
+      leaveYearClosures,
+      auditEvents,
+    }
+    persistEpochRef.current += 1
+  }, [
+    employees,
+    absences,
+    company,
+    bankHolidays,
+    requests,
+    portalMessages,
+    documentFolders,
+    employeeDocuments,
+    accounts,
+    expenseClaims,
+    vatReceipts,
+    taskDismissals,
+    policies,
+    leaveAdjustments,
+    leaveYearClosures,
+    auditEvents,
+  ])
+
+  const applyIdRemaps = (idRemap?: {
+    requests?: Array<{ from: number; to: number }>
+    expenseClaims?: Array<{ from: number; to: number }>
+  }) => {
+    if (!idRemap) return
+    const requestMap = new Map((idRemap.requests || []).map((item) => [item.from, item.to]))
+    const expenseMap = new Map((idRemap.expenseClaims || []).map((item) => [item.from, item.to]))
+    if (requestMap.size > 0) {
+      setRequests((current) =>
+        current.map((request) =>
+          requestMap.has(request.id) ? { ...request, id: requestMap.get(request.id)! } : request,
+        ),
+      )
+      setPortalMessages((current) =>
+        current.map((message) =>
+          requestMap.has(message.requestId)
+            ? { ...message, requestId: requestMap.get(message.requestId)! }
+            : message,
+        ),
+      )
+    }
+    if (expenseMap.size > 0) {
+      setExpenseClaims((current) =>
+        current.map((claim) =>
+          expenseMap.has(claim.id) ? { ...claim, id: expenseMap.get(claim.id)! } : claim,
+        ),
+      )
+    }
+  }
+
   const persistAppData = async (overrides: {
     expenseClaims?: typeof expenseClaims
     vatReceipts?: VatReceipt[]
@@ -336,32 +424,43 @@ function App() {
     const run = async () => {
       const appendBatch = pendingAuditAppendRef.current
       pendingAuditAppendRef.current = []
+      const snapshot = appDataSnapshotRef.current
+      const epochAtStart = persistEpochRef.current
       const auditSnapshot = mergeAuditEvents(
-        overrides.auditEvents ?? auditEvents,
+        overrides.auditEvents ?? snapshot.auditEvents,
         appendBatch,
       )
       const result = await saveAppData({
-        employees,
-        absences,
-        company: overrides.company ?? company,
-        bankHolidays,
-        requests,
-        portalMessages,
-        documentFolders,
-        employeeDocuments,
-        accounts: overrides.accounts ?? accounts,
-        expenseClaims: overrides.expenseClaims ?? expenseClaims,
-        vatReceipts: overrides.vatReceipts ?? vatReceipts,
-        taskDismissals: overrides.taskDismissals ?? taskDismissals,
-        policies: overrides.policies ?? policies,
-        leaveAdjustments: overrides.leaveAdjustments ?? leaveAdjustments,
-        leaveYearClosures: overrides.leaveYearClosures ?? leaveYearClosures,
+        employees: snapshot.employees,
+        absences: snapshot.absences,
+        company: overrides.company ?? snapshot.company,
+        bankHolidays: snapshot.bankHolidays,
+        requests: snapshot.requests,
+        portalMessages: snapshot.portalMessages,
+        documentFolders: snapshot.documentFolders,
+        employeeDocuments: snapshot.employeeDocuments,
+        accounts: overrides.accounts ?? snapshot.accounts,
+        expenseClaims: overrides.expenseClaims ?? snapshot.expenseClaims,
+        vatReceipts: overrides.vatReceipts ?? snapshot.vatReceipts,
+        taskDismissals: overrides.taskDismissals ?? snapshot.taskDismissals,
+        policies: overrides.policies ?? snapshot.policies,
+        leaveAdjustments: overrides.leaveAdjustments ?? snapshot.leaveAdjustments,
+        leaveYearClosures: overrides.leaveYearClosures ?? snapshot.leaveYearClosures,
         auditEvents: auditSnapshot,
         _auditAppend: appendBatch,
       })
       if (!result.ok) {
         pendingAuditAppendRef.current = [...appendBatch, ...pendingAuditAppendRef.current]
         return false
+      }
+      // If the user edited while this save was in flight, do not clobber newer local
+      // state with the older server projection — only apply id remaps.
+      if (persistEpochRef.current !== epochAtStart) {
+        applyIdRemaps(result.data.idRemap)
+        if (Array.isArray(result.data.auditEvents)) {
+          setAuditEvents(result.data.auditEvents)
+        }
+        return true
       }
       if (result.data.data && typeof result.data.data === 'object') {
         applyAppData(result.data.data)

@@ -26,6 +26,17 @@ export function clearPasswordSetup(account) {
   delete account.passwordSetup
 }
 
+/** Clear setup state only when the account still holds this exact token. */
+export function clearPasswordSetupIfToken(account, rawToken) {
+  if (!account) return false
+  const token = String(rawToken || '').trim()
+  if (!token) return false
+  const tokenHash = hashPasswordSetupToken(token)
+  if (account.passwordSetup?.tokenHash !== tokenHash) return false
+  clearPasswordSetup(account)
+  return true
+}
+
 export function findAccountByPasswordSetupToken(store, rawToken) {
   const token = String(rawToken || '').trim()
   if (!token) return { ok: false, reason: 'missing' }

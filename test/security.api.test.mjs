@@ -396,6 +396,57 @@ describe('app-data authorization', () => {
     )
   })
 
+  test('stale employee save does not delete a pending expense created elsewhere', async () => {
+    const employeeView = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(employeeView.status, 200)
+
+    // Tab A creates a pending expense.
+    const created = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: employeeCookie,
+      body: {
+        ...employeeView.payload,
+        expenseClaims: [
+          ...(employeeView.payload.expenseClaims || []),
+          {
+            id: 8801,
+            employeeId: 2,
+            status: 'Pending',
+            title: 'tab-a expense',
+            amount: 15,
+            date: '2026-09-10',
+          },
+        ],
+      },
+    })
+    assert.equal(created.status, 200)
+    assert.ok(
+      (created.payload.data.expenseClaims || []).some(
+        (claim) => claim.title === 'tab-a expense' || claim.id === 8801,
+      ),
+    )
+
+    // Tab B saves an older snapshot that omits that expense — must not delete it.
+    const stale = await server.api('/api/app-data', {
+      method: 'PUT',
+      cookie: employeeCookie,
+      body: {
+        ...employeeView.payload,
+        expenseClaims: employeeView.payload.expenseClaims || [],
+      },
+    })
+    assert.equal(stale.status, 200)
+
+    const after = await server.api('/api/app-data', { cookie: employeeCookie })
+    assert.equal(after.status, 200)
+    assert.ok(
+      (after.payload.expenseClaims || []).some(
+        (claim) => claim.title === 'tab-a expense' || claim.id === 8801,
+      ),
+      'pending expense from other tab must survive stale save',
+    )
+  })
+
   test('employee leave/expense creates colliding with another id are remapped and returned', async () => {
     const adminView = await server.api('/api/app-data', { cookie: adminCookie })
     const seeded = await server.api('/api/app-data', {

@@ -51,6 +51,7 @@ import {
 } from './webauthn.mjs'
 import {
   clearPasswordSetup,
+  clearPasswordSetupIfToken,
   findAccountByPasswordSetupToken,
   issuePasswordSetup,
   passwordSetupUrl,
@@ -372,10 +373,10 @@ app.post('/api/auth/forgot-password', forgotPasswordLimiter, async (req, res) =>
     text: lines.join('\n'),
   })
   if (!mailed.ok) {
-    // Clear the unused token so a failed send does not leave a live reset.
+    // Clear only this request's token — a newer successful reset must stay valid.
     await updateStore((store) => {
       const account = findAccountById(store, prepared.accountId)
-      if (account) clearPasswordSetup(account)
+      clearPasswordSetupIfToken(account, prepared.token)
     })
     return res.status(503).json({
       error: 'Could not send the reset email. Contact an admin, or try again later.',
@@ -1695,7 +1696,7 @@ app.post('/api/accounts/:id/resend-invite', async (req, res) => {
   if (!mailed.ok) {
     await updateStore((store) => {
       const account = findAccountById(store, prepared.accountId)
-      if (account) clearPasswordSetup(account)
+      clearPasswordSetupIfToken(account, prepared.inviteToken)
     })
     return res.status(503).json({ error: 'Could not send the invite email. Try again later.' })
   }
