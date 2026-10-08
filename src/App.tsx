@@ -244,6 +244,11 @@ function App() {
     baseData: Record<string, unknown>
     localData: Record<string, unknown>
     overlapSummaries: string[]
+    /** Prepared merge awaiting explicit confirm when overlaps exist. */
+    pendingMerge: {
+      mergedPayload: Record<string, unknown>
+      overlapCount: number
+    } | null
   } | null>(null)
   const [conflictBusy, setConflictBusy] = useState(false)
 
@@ -518,6 +523,7 @@ function App() {
               baseData,
               localData,
               overlapSummaries: describeConflicts(preview.conflicts),
+              pendingMerge: null,
             })
           } else {
             setToast(
@@ -733,13 +739,49 @@ function App() {
     window.setTimeout(() => setToast(''), 2800)
   }
 
+  const commitPendingConflictMerge = async (
+    mergedPayload: Record<string, unknown>,
+    overlapCount: number,
+  ) => {
+    const serverRevision =
+      typeof mergedPayload.revision === 'number'
+        ? mergedPayload.revision
+        : syncConflict?.serverRevision
+    // Apply merged UI state but keep the prior sync base until persist succeeds.
+    // Otherwise a mid-merge 409 would treat the merge as already synced and drop deltas.
+    suppressPersistRef.current = true
+    applyAppData(mergedPayload, { asSyncedBase: false })
+    setSyncConflict(null)
+    const saved = await persistAppData(
+      typeof serverRevision === 'number' ? { revision: serverRevision } : {},
+    )
+    if (saved) {
+      syncedBaseRef.current = structuredClone(
+        appDataSnapshotRef.current,
+      ) as Record<string, unknown>
+      notify(
+        overlapCount > 0
+          ? 'Merged your changes. Where the same fields conflicted, their values were kept.'
+          : 'Your changes were merged and saved',
+      )
+    } else {
+      // Persist may 409 again if another write landed mid-merge; dialog will re-open
+      // using the original synced base so local deltas can be reapplied.
+      notify('Could not save the merged changes. Check the conflict prompt or try again.')
+    }
+  }
+
   const discardConflictAndReload = async () => {
     if (!syncConflict || conflictBusy) return
     setConflictBusy(true)
     try {
       const fresh = await fetchAppData()
+      if (!fresh.ok) {
+        notify('Could not refresh organisation data. Your changes are still here — try again.')
+        return
+      }
       suppressPersistRef.current = true
-      applyAppData(fresh.ok ? fresh.data : syncConflict.serverData)
+      applyAppData(fresh.data)
       setSyncConflict(null)
       notify('Loaded the latest organisation data')
     } finally {
@@ -751,6 +793,15 @@ function App() {
     if (!syncConflict || conflictBusy) return
     setConflictBusy(true)
     try {
+      // Confirm step: user already reviewed freshly calculated overlaps.
+      if (syncConflict.pendingMerge) {
+        await commitPendingConflictMerge(
+          syncConflict.pendingMerge.mergedPayload,
+          syncConflict.pendingMerge.overlapCount,
+        )
+        return
+      }
+
       // Refresh both sides: local may have changed while the dialog was open, and
       // another save may have landed on the server in the meantime.
       const fresh = await fetchAppData()
@@ -769,26 +820,23 @@ function App() {
         fresh.data,
       )
       const mergedPayload = { ...merged, revision: serverRevision }
-      // Apply merged UI state but keep the prior sync base until persist succeeds.
-      // Otherwise a mid-merge 409 would treat the merge as already synced and drop deltas.
-      suppressPersistRef.current = true
-      applyAppData(mergedPayload, { asSyncedBase: false })
-      setSyncConflict(null)
-      const saved = await persistAppData({ revision: serverRevision })
-      if (saved) {
-        syncedBaseRef.current = structuredClone(
-          appDataSnapshotRef.current,
-        ) as Record<string, unknown>
-        notify(
-          conflicts.length > 0
-            ? 'Merged your changes. Where the same fields conflicted, their values were kept.'
-            : 'Your changes were merged and saved',
-        )
-      } else {
-        // Persist may 409 again if another write landed mid-merge; dialog will re-open
-        // using the original synced base so local deltas can be reapplied.
-        notify('Could not save the merged changes. Check the conflict prompt or try again.')
+      const overlapSummaries = describeConflicts(conflicts)
+
+      // Always show recalculated overlaps before committing when any exist.
+      if (conflicts.length > 0) {
+        setSyncConflict({
+          ...syncConflict,
+          serverData: fresh.data,
+          serverRevision,
+          localData,
+          overlapSummaries,
+          pendingMerge: { mergedPayload, overlapCount: conflicts.length },
+        })
+        notify('Review the overlapping fields below, then confirm the merge.')
+        return
       }
+
+      await commitPendingConflictMerge(mergedPayload, 0)
     } finally {
       setConflictBusy(false)
     }
@@ -2679,8 +2727,9 @@ function App() {
               {syncConflict.overlapSummaries.length > 0 && (
                 <div className="sync-conflict-overlaps">
                   <p>
-                    These fields were edited by both of you. Merging will discard your local value
-                    for them and keep theirs:
+                    {syncConflict.pendingMerge
+                      ? 'These fields still overlap after refreshing latest data. Confirming will discard your local value for them and keep theirs:'
+                      : 'These fields were edited by both of you. Merging will discard your local value for them and keep theirs:'}
                   </p>
                   <ul>
                     {syncConflict.overlapSummaries.map((line) => (
@@ -2709,7 +2758,13 @@ function App() {
                   void mergeConflictChangesAndSave()
                 }}
               >
-                {conflictBusy ? 'Saving…' : 'Merge mine onto theirs'}
+                {conflictBusy
+                  ? syncConflict.pendingMerge
+                    ? 'Saving…'
+                    : 'Checking…'
+                  : syncConflict.pendingMerge
+                    ? 'Confirm merge'
+                    : 'Merge mine onto theirs'}
               </button>
             </div>
           </div>
