@@ -26,12 +26,12 @@ export function LoginPage({
   onSignedIn,
   onRecoverySignedIn,
   initialEmail = '',
-  onBackToLanding,
+  onCreateOrganisation,
 }: {
   onSignedIn: (account: PublicAccount) => void
   onRecoverySignedIn: () => void
   initialEmail?: string
-  onBackToLanding?: () => void
+  onCreateOrganisation?: () => void
 }) {
   const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
@@ -301,14 +301,14 @@ export function LoginPage({
               >
                 Forgot password?
               </button>
-              {onBackToLanding && (
+              {onCreateOrganisation && (
                 <>
                   <span className="login-forgot-sep">·</span>
                   <button
                     type="button"
                     className="login-forgot-link"
                     disabled={busy}
-                    onClick={onBackToLanding}
+                    onClick={onCreateOrganisation}
                   >
                     About Finch
                   </button>

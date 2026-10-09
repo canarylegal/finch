@@ -37,7 +37,6 @@ import {
   createAccountRequest,
   emailPayrollReportRequest,
   fetchAppData,
-  fetchBootstrap,
   fetchMe,
   logoutRequest,
   saveAppData,
@@ -172,9 +171,6 @@ function App() {
   const [bootState, setBootState] = useState<BootState>('loading')
   const [accounts, setAccounts] = useState<Account[]>(empty.accounts)
   const [sessionAccount, setSessionAccount] = useState<Account | null>(null)
-  const [bootstrapInfo, setBootstrapInfo] = useState<{
-    companyName: string
-  }>({ companyName: '' })
   const [passwordSetupToken, setPasswordSetupToken] = useState('')
   const [loginPrefillEmail, setLoginPrefillEmail] = useState('')
   const [activeNav, setActiveNav] = useState('Overview')
@@ -580,12 +576,6 @@ function App() {
     localStorage.removeItem('finch-session')
     void (async () => {
       const setupToken = readSetPasswordToken()
-      const bootstrap = await fetchBootstrap()
-      if (bootstrap.ok) {
-        setBootstrapInfo({
-          companyName: bootstrap.data.companyName || '',
-        })
-      }
 
       const me = await fetchMe()
       if (!me.ok) {
@@ -594,7 +584,7 @@ function App() {
           setBootState('set-password')
           return
         }
-        setBootState('landing')
+        setBootState('login')
         return
       }
       if (
@@ -885,13 +875,7 @@ function App() {
   const signOut = async () => {
     await logoutRequest()
     setSessionAccount(null)
-    const bootstrap = await fetchBootstrap()
-    if (bootstrap.ok) {
-      setBootstrapInfo({
-        companyName: bootstrap.data.companyName || '',
-      })
-    }
-    setBootState('landing')
+    setBootState('login')
     setActiveNav('Overview')
     setAdminWorkspaceView('admin')
     setMobileNavOpen(false)
@@ -2013,7 +1997,7 @@ function App() {
   }
 
   if (bootState === 'recovery') {
-    return <RecoveryConsole onSignedOut={() => setBootState('landing')} />
+    return <RecoveryConsole onSignedOut={() => setBootState('login')} />
   }
 
   if (bootState === 'set-password') {
@@ -2038,8 +2022,7 @@ function App() {
     return (
       <>
         <LandingPage
-          companyName={bootstrapInfo.companyName}
-          onSignIn={() => setBootState('login')}
+          onBack={() => setBootState('login')}
           onSignedIn={(account) => {
             void (async () => {
               const loaded = await loadAppDataForSession(account)
@@ -2057,7 +2040,7 @@ function App() {
       <>
         <LoginPage
           initialEmail={loginPrefillEmail}
-          onBackToLanding={() => setBootState('landing')}
+          onCreateOrganisation={() => setBootState('landing')}
           onSignedIn={(account) => {
             void (async () => {
               const loaded = await loadAppDataForSession(account)
