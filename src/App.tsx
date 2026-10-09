@@ -721,6 +721,7 @@ function App() {
   }
   const pendingCount =
     requests.filter((request) => request.status === 'Pending').length +
+    requests.filter((request) => Boolean(request.pendingAmendment)).length +
     pendingExpenseCount(expenseClaims)
   const leaveYear = useMemo(
     () => getLeaveYearPeriod(appToday(), company.leaveYearStart, company.leaveYearEnd),
@@ -2257,6 +2258,7 @@ function App() {
               onUpdateRequest={updateRequest}
               onApproveExpense={(id) => reviewExpenseClaim(id, 'Approved')}
               onOpenExpense={setActiveExpenseClaimId}
+              onOpenLeaveRequest={setActiveLeaveRequestId}
               upcomingTasks={upcomingTasks}
               onCompleteTask={completeHrTask}
               onSnoozeTask={snoozeHrTask}

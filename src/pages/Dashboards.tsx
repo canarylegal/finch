@@ -53,6 +53,7 @@ import {
 } from '../mandatoryLeave'
 import type { LeaveAdjustment } from '../leaveAdjustments'
 import { leaveRequestTypeLabel, isAnnualLeaveRequest } from '../leaveTypes'
+import { hasPendingAmendment } from '../leaveRequestHelpers'
 import { formatPolicyUpdatedAt, sortedPolicies } from '../policies'
 import { PolicyViewerModal } from '../modals/PolicyViewerModal'
 import { formatDisplayDate, parseIsoDate, type AbsenceRecord, type BankHoliday } from '../payroll'
@@ -405,6 +406,7 @@ type AdminDashboardProps = {
   onUpdateRequest: (id: number, status: RequestStatus) => void
   onApproveExpense: (claimId: number) => void
   onOpenExpense: (claimId: number) => void
+  onOpenLeaveRequest: (requestId: number) => void
   upcomingTasks: HrTask[]
   onCompleteTask: (taskKey: string) => void
   onSnoozeTask: (taskKey: string) => void
@@ -432,6 +434,7 @@ export function AdminDashboard({
   onUpdateRequest,
   onApproveExpense,
   onOpenExpense,
+  onOpenLeaveRequest,
   upcomingTasks,
   onCompleteTask,
   onSnoozeTask,
@@ -446,7 +449,12 @@ export function AdminDashboard({
 }: AdminDashboardProps) {
   const today = appToday()
   const pendingRequests = requests.filter((request) => request.status === 'Pending')
+  const pendingAmendments = requests.filter((request) => hasPendingAmendment(request))
   const pendingExpenses = expenseClaims.filter((claim) => claim.status === 'Pending')
+  const inboxEmpty =
+    pendingRequests.length === 0 &&
+    pendingAmendments.length === 0 &&
+    pendingExpenses.length === 0
   const entitlementSettings = companyEntitlementSettings(company)
   const calendarDate = today
   const needsLeaveYear = !company.leaveYearConfigured
@@ -579,9 +587,9 @@ export function AdminDashboard({
           <div className="section-heading">
             <div>
               <h2>
-                Pending requests <span className="heading-count">{pendingCount}</span>
+                Needs attention <span className="heading-count">{pendingCount}</span>
               </h2>
-              <p>Review leave and expense claims from your team</p>
+              <p>Leave, amendments, and expenses waiting for your review</p>
             </div>
             <button
               type="button"
@@ -591,7 +599,7 @@ export function AdminDashboard({
               View all <ChevronRight size={15} />
             </button>
           </div>
-          {pendingRequests.length === 0 && pendingExpenses.length === 0 ? (
+          {inboxEmpty ? (
             <div className="empty-state">
               <div className="empty-icon">
                 <Check size={20} />
@@ -675,6 +683,37 @@ export function AdminDashboard({
               </div>
               )
             })}
+            {pendingAmendments.map((request) => {
+              const amendment = request.pendingAmendment
+              return (
+                <div className="admin-request" key={`amendment-${request.id}`}>
+                  <div className={`avatar avatar-${request.color}`}>{request.initials}</div>
+                  <div className="admin-request-main">
+                    <strong>{request.name}</strong>
+                    <span>
+                      {amendment?.dates ?? request.dates} <i>·</i> {amendment?.duration ?? request.duration}
+                    </span>
+                    <small>
+                      Leave change proposed
+                      {amendment?.note ? ` · ${amendment.note}` : ''}
+                    </small>
+                  </div>
+                  <div className="request-actions">
+                    {canReviewEmployee(request.employeeId) ? (
+                      <button
+                        type="button"
+                        className="approve-button"
+                        onClick={() => onOpenLeaveRequest(request.id)}
+                      >
+                        Review change
+                      </button>
+                    ) : (
+                      <span className="field-helper">Needs another admin</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
             {pendingExpenses.map((claim) => (
               <div className="admin-request" key={`expense-${claim.id}`}>
                 <div className={`avatar avatar-${claim.color}`}>{claim.initials}</div>
@@ -715,7 +754,7 @@ export function AdminDashboard({
             ))}
             </>
           )}
-          {(pendingRequests.length > 0 || pendingExpenses.length > 0) && (
+          {!inboxEmpty && (
             <div className="panel-footer">
               <span>
                 Employees are notified when you respond (email when SMTP is configured).
